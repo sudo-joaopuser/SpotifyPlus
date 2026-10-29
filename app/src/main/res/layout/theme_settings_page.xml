@@ -105,6 +105,66 @@
                         android:contentDescription="@string/theme_settings_page_enable_custom_theme"/>
             </LinearLayout>
 
+            <LinearLayout
+                    android:id="@+id/row_disable_album_gradients"
+                    android:layout_width="match_parent"
+                    android:layout_height="86dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="8dp"
+                    android:clickable="true" android:focusable="true"
+                    android:background="@drawable/row_click_bg">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Disable album-based gradients on playlist backgrounds and use the theme Accent Color" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                    <TextView style="@style/TextAppearance.Material3.BodySmall" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Playlist/album backgrounds use the theme accent color, without the gradient extracted from the cover" android:textColor="?attr/colorOnSurfaceVariant"/>
+                </LinearLayout>
+                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_disable_album_gradients" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingEnd="8dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                    android:id="@+id/row_playlist_accent_picker"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="8dp"
+                    android:visibility="gone">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Playlist accent color" android:textColor="@color/white" android:textSize="14sp" android:paddingBottom="8dp" />
+                <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <LinearLayout android:id="@+id/picker_playlist_accent" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" />
+                </HorizontalScrollView>
+            </LinearLayout>
+
+            <LinearLayout
+                    android:id="@+id/row_force_player_color"
+                    android:layout_width="match_parent"
+                    android:layout_height="86dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical"
+                    android:layout_marginBottom="8dp"
+                    android:clickable="true" android:focusable="true"
+                    android:background="@drawable/row_click_bg">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Force the theme color in the Player" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                    <TextView style="@style/TextAppearance.Material3.BodySmall" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="The player uses the theme accent color instead of the colors extracted from the cover/album" android:textColor="?attr/colorOnSurfaceVariant"/>
+                </LinearLayout>
+                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_force_player_color" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingEnd="8dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                    android:id="@+id/row_player_color_picker"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginBottom="8dp"
+                    android:visibility="gone">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Player color" android:textColor="@color/white" android:textSize="14sp" android:paddingBottom="8dp" />
+                <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <LinearLayout android:id="@+id/picker_player_color" android:layout_width="wrap_content" android:layout_height="wrap_content" android:orientation="horizontal" />
+                </HorizontalScrollView>
+            </LinearLayout>
+
+
+
             <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"

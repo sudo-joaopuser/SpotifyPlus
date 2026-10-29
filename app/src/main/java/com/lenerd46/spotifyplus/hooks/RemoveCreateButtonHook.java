@@ -947,6 +947,37 @@ public class RemoveCreateButtonHook extends SpotifyHook {
                                 autoTheme.setChecked(prefs.getBoolean("auto_theme", false));
                                 autoTheme.setOnCheckedChangeListener((button, value) -> prefs.edit().putBoolean("auto_theme", value).apply());
 
+                                try {
+                                MaterialSwitch disableAlbumGradients = view.findViewById(R.id.switch_disable_album_gradients);
+                                if (disableAlbumGradients != null) {
+                                    disableAlbumGradients.setChecked(prefs.getBoolean("theme_disable_album_gradients_playlists", false));
+                                    View playlistPicker = view.findViewById(R.id.row_playlist_accent_picker);
+                                    disableAlbumGradients.setOnCheckedChangeListener((button, value) -> {
+                                        prefs.edit().putBoolean("theme_disable_album_gradients_playlists", value).apply();
+                                        if (playlistPicker != null) playlistPicker.setVisibility(value ? View.VISIBLE : View.GONE);
+                                    });
+                                    if (playlistPicker != null) playlistPicker.setVisibility(disableAlbumGradients.isChecked() ? View.VISIBLE : View.GONE);
+                                    View disableRow = view.findViewById(R.id.row_disable_album_gradients);
+                                    if (disableRow != null) disableRow.setOnClickListener(rowView -> disableAlbumGradients.toggle());
+                                    bindThemeColorPicker(activity, view, prefs, R.id.picker_playlist_accent, "theme_playlist_accent_color");
+                                }
+                                MaterialSwitch forcePlayerColor = view.findViewById(R.id.switch_force_player_color);
+                                if (forcePlayerColor != null) {
+                                    forcePlayerColor.setChecked(prefs.getBoolean("theme_force_player_color", false));
+                                    View playerPicker = view.findViewById(R.id.row_player_color_picker);
+                                    forcePlayerColor.setOnCheckedChangeListener((button, value) -> {
+                                        prefs.edit().putBoolean("theme_force_player_color", value).apply();
+                                        if (playerPicker != null) playerPicker.setVisibility(value ? View.VISIBLE : View.GONE);
+                                    });
+                                    if (playerPicker != null) playerPicker.setVisibility(forcePlayerColor.isChecked() ? View.VISIBLE : View.GONE);
+                                    View forceRow = view.findViewById(R.id.row_force_player_color);
+                                    if (forceRow != null) forceRow.setOnClickListener(rowView -> forcePlayerColor.toggle());
+                                    bindThemeColorPicker(activity, view, prefs, R.id.picker_player_color, "theme_player_color");
+                                }
+                                } catch (Throwable t) {
+                                    de.robv.android.xposed.XposedBridge.log("[SpotifyPlus][ThemeSettings] Theme accent options binding failed, rest of Theme screen kept: " + t);
+                                }
+
                                 bindRadioButtons(view, prefs, "generated_theme_mode", "neutral", new int[]{R.id.rb_generated_light, R.id.rb_generated_neutral, R.id.rb_generated_dark}, new String[]{"light", "neutral", "dark"});
                                 bindRadioButtons(view, prefs, "auto_theme_mode", "neutral", new int[]{R.id.rb_auto_light, R.id.rb_auto_neutral, R.id.rb_auto_dark}, new String[]{"light", "neutral", "dark"});
 
@@ -1536,6 +1567,69 @@ public class RemoveCreateButtonHook extends SpotifyHook {
             value.setText(String.format("#%08X", selectedColor));
             swatch.setCardBackgroundColor(selectedColor);
         }));
+    }
+
+    /**
+     * Color picker below a theme option: one swatch per color of the saved theme
+     * palette (the same values the color rows below edit), name in English plus a
+     * color sample. The choice is saved under prefKey; ThemeHook falls back to the
+     * theme accent while nothing is chosen. ThemeHook has no separate Primary or
+     * Secondary palette entries, so Accent (the primary) and Base (the generated
+     * theme seed) cover that role.
+     */
+    private void bindThemeColorPicker(Activity activity, View root, SharedPreferences prefs, int pickerId, String prefKey) {
+        // Never let the picker crash the Theme screen: on any failure the
+        // switches stay usable and the picker simply stays empty.
+        // (Previous version created a MaterialCardView with the raw Spotify
+        // activity context, which is not a Material theme and crashes the
+        // whole Theme page on open; swatches are now plain Views.)
+        try {
+        ViewGroup picker = root.findViewById(pickerId);
+        if (picker == null) return;
+        String[] names = {"Accent", "Base", "Background", "Surface", "Tinted", "Text", "Text subdued", "Decorative"};
+        String[] keys = {"theme_accent", "theme_base", "theme_background", "theme_surface", "theme_tinted", "theme_text", "theme_text_subdued", "theme_decorative"};
+        int[] defaults = {ThemeHook.ACCENT, 0xFF0077B6, ThemeHook.BACKGROUND, ThemeHook.SURFACE, ThemeHook.TINTED, ThemeHook.TEXT, ThemeHook.TEXT_SUBDUED, ThemeHook.DECORATIVE};
+        Runnable rebuild = () -> {
+            picker.removeAllViews();
+            int selected = prefs.getInt(prefKey, prefs.getInt("theme_accent", ThemeHook.ACCENT));
+            float density = activity.getResources().getDisplayMetrics().density;
+            int swatch = Math.round(40 * density);
+            int radius = Math.round(20 * density);
+            int stroke = Math.round(2 * density);
+            int gap = Math.round(12 * density);
+            for (int i = 0; i < names.length; i++) {
+                int color = prefs.getInt(keys[i], defaults[i]);
+                boolean isSelected = color == selected;
+                LinearLayout item = new LinearLayout(activity);
+                item.setOrientation(LinearLayout.VERTICAL);
+                item.setGravity(Gravity.CENTER_HORIZONTAL);
+                item.setPadding(0, 0, gap, 0);
+                View dot = new View(activity);
+                dot.setLayoutParams(new LinearLayout.LayoutParams(swatch, swatch));
+                android.graphics.drawable.GradientDrawable dotBg = new android.graphics.drawable.GradientDrawable();
+                dotBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+                dotBg.setColor(color);
+                dotBg.setStroke(isSelected ? stroke : 0, isSelected ? Color.WHITE : Color.TRANSPARENT);
+                dot.setBackground(dotBg);
+                item.addView(dot);
+                TextView label = new TextView(activity);
+                label.setText(names[i]);
+                label.setTextSize(10);
+                label.setTextColor(isSelected ? Color.WHITE : 0xFFB3B3B3);
+                label.setGravity(Gravity.CENTER_HORIZONTAL);
+                item.addView(label);
+                int picked = color;
+                item.setOnClickListener(v -> {
+                    prefs.edit().putInt(prefKey, picked).apply();
+                    bindThemeColorPicker(activity, root, prefs, pickerId, prefKey);
+                });
+                picker.addView(item);
+            }
+        };
+        rebuild.run();
+        } catch (Throwable t) {
+            de.robv.android.xposed.XposedBridge.log("[SpotifyPlus][ThemeSettings] Theme color picker failed, switches kept: " + t);
+        }
     }
 
     private void openColorPicker(Activity activity, int initialColor, java.util.function.IntConsumer onColorSelected) {

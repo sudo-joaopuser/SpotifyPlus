@@ -91,6 +91,22 @@ public class ThemeHook extends SpotifyHook {
     private static int accentColor() {
         return usesAnimatedBackground() ? ensureContrast(ACCENT, 0xFF666666, Color.WHITE, 3.0) : ACCENT;
     }
+    /** Per-option overrides picked in Theme settings; 0 (never chosen) falls back to the theme accent. */
+    private int playlistAccentColor() {
+        int saved = prefs.getInt("theme_playlist_accent_color", 0);
+        return saved != 0 ? saved : accentColor();
+    }
+    private int playerColor() {
+        int saved = prefs.getInt("theme_player_color", 0);
+        return saved != 0 ? saved : accentColor();
+    }
+    private static int staticPlayerColor() {
+        int saved = themePrefs == null ? 0 : themePrefs.getInt("theme_player_color", 0);
+        return saved != 0 ? saved : accentColor();
+    }
+    private static boolean playerForced() {
+        return themePrefs != null && themePrefs.getBoolean("theme_force_player_color", false);
+    }
     private static int onAccentColor() { return usesAnimatedBackground() ? bestTextColor(accentColor()) : ON_ACCENT; }
     private static int navigationFade() { return usesAnimatedBackground() ? AnimatedThemePalette.NAVIGATION : baseBackground(); }
 
@@ -167,6 +183,14 @@ public class ThemeHook extends SpotifyHook {
     private static final Map<Object, NativeAccentBinding> nativeAccentIcons = Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<Activity, Integer> activityPaletteGenerations = Collections.synchronizedMap(new WeakHashMap<>());
     private static volatile int paletteGeneration;
+    private static volatile android.content.SharedPreferences themePrefs;
+    // Views/gradients whose colour Spotify rewrites on every track change.
+    // Setter hooks below intercept those rewrites synchronously, so a forced
+    // colour never shows the original colour for a frame first. All maps are
+    // WeakHashMaps: dropping a view drops its tracking, never a leak.
+    private static final Map<Object, Boolean> trackedPlayerGradients = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<View, Boolean> trackedPlayButtons = Collections.synchronizedMap(new WeakHashMap<>());
+    private static volatile boolean forcedSetterHooksInstalled;
     private static int recreationGeneration;
 
     private final ExecutorService artworkExecutor = Executors.newSingleThreadExecutor();
@@ -182,6 +206,7 @@ public class ThemeHook extends SpotifyHook {
     public ThemeHook(Context context) {
         this.context = context;
         prefs = context.getSharedPreferences("SpotifyPlus", Context.MODE_PRIVATE);
+        themePrefs = prefs;
         if (prefs.getBoolean("theme_palette_saved", false)) loadCustomTheme(prefs);
         themeEnabled = prefs.getBoolean("theme_enabled", false);
         animatedBackgroundEnabled = prefs.getBoolean(ANIMATED_BACKGROUND_PREFERENCE, false);
@@ -255,6 +280,8 @@ public class ThemeHook extends SpotifyHook {
         hookHomeHeader();
         patchHomeFilterChipColor();
         hookArtworkGradients();
+        hookForcedColorSurfaces();
+        hookForcedViewSetters();
 
         hookSpotifyConnectColor();
         hookCreativeWorkAlbumHeader();
@@ -351,7 +378,24 @@ public class ThemeHook extends SpotifyHook {
                     Object original = param.args[0];
                     if (original == null) return;
                     try {
-                        param.args[0] = recolorEncorePalette(original);
+                        // Lyrics screens are the one place where the artwork
+                        // palette must NOT win: recolorEncorePalette only
+                        // recolours the four stock bases (121212/1F1F1F/
+                        // tint/green) and returns an artwork-derived palette
+                        // untouched — which is exactly why fullscreen lyrics
+                        // stay red/pink (artwork) instead of the theme, no
+                        // matter what theme is picked. Scope is deliberately
+                        // narrow (content class name contains "lyric") so
+                        // NPV, headers and other artwork surfaces keep
+                        // their artwork colours.
+                        Object content = param.args.length > 1 ? param.args[1] : null;
+                        if (themeEnabled && content != null
+                                && content.getClass().getName().toLowerCase(java.util.Locale.ROOT).contains("lyric")) {
+                            param.args[0] = createLightEncorePalette(original, baseBackground(), backgroundHighlight(), backgroundPress());
+                            XposedBridge.log("[SpotifyPlus][ThemeLyrics] Forced theme palette for lyrics content: " + content.getClass().getName());
+                        } else {
+                            param.args[0] = recolorEncorePalette(original);
+                        }
                     } catch (Throwable throwable) {
                         XposedBridge.log(throwable);
                     }
@@ -775,10 +819,16 @@ public class ThemeHook extends SpotifyHook {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
                     if (!themeEnabled) return;
+                    // Force off = completely original: do not touch the
+                    // artwork gradient at all, not even to fade it to base.
+                    if (!prefs.getBoolean("theme_force_player_color", false)) return;
                     try {
                         GradientDrawable gradient = (GradientDrawable) getInstanceFieldValue(param.thisObject, GradientDrawable.class);
                         if (gradient == null) return;
-                        int[] colors = {Color.TRANSPARENT, Color.TRANSPARENT, baseBackground()};
+                        trackedPlayerGradients.put(gradient, Boolean.TRUE);
+                        // Option: force the theme accent in the player instead
+                        // of the artwork-derived background gradient.
+                        int[] colors = new int[]{playerColor(), playerColor(), baseBackground()};
 
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             gradient.setColors(colors, new float[]{0.00f, 0.88f, 1.00f});
@@ -790,6 +840,86 @@ public class ThemeHook extends SpotifyHook {
                 }
             });
         } catch (Throwable throwable) {
+        }
+    }
+
+    /**
+     * Synchronous colour interception for the play buttons. Spotify repaints
+     * them on every track change, after inflation, which is what caused the
+     * one-frame flash of the original colour. These before-hooks rewrite
+     * Spotify's own setter argument to the forced colour, so the original
+     * colour is never painted at all. When the toggle is off they do
+     * nothing and the original passes through.
+     */
+    private void hookForcedViewSetters() {
+        try {
+            if (forcedSetterHooksInstalled) return;
+            forcedSetterHooksInstalled = true;
+            XposedBridge.hookAllMethods(View.class, "setBackgroundTintList", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        if (trackedPlayButtons.containsKey(param.thisObject) && playerForced())
+                            param.args[0] = ColorStateList.valueOf(staticPlayerColor());
+                    } catch (Throwable ignored) {}
+                }
+            });
+            XposedBridge.hookAllMethods(android.graphics.drawable.GradientDrawable.class, "setColors", new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        if (!trackedPlayerGradients.containsKey(param.thisObject) || !playerForced()) return;
+                        if (param.args.length == 0 || !(param.args[0] instanceof int[])) return;
+                        int[] original = (int[]) param.args[0];
+                        int[] forced = new int[original.length];
+                        for (int i = 0; i < original.length; i++)
+                            forced[i] = (i == original.length - 1) ? baseBackground() : staticPlayerColor();
+                        param.args[0] = forced;
+                    } catch (Throwable ignored) {}
+                }
+            });
+        } catch (Throwable throwable) {
+            XposedBridge.log(throwable);
+        }
+    }
+
+    /**
+     * Forced player color on surfaces the gradient/header hooks never reach.
+     * The circular play buttons (cwp_play_button, header_play_button) are
+     * separate views tinted from artwork/Spotify green per screen, so with force
+     * on they are painted with the chosen player color at inflation.
+     */
+    private void hookForcedColorSurfaces() {
+        try {
+            int cwpPlayId = resourceId("id", "cwp_play_button");
+            int headerPlayId = resourceId("id", "header_play_button");
+            XposedBridge.hookAllMethods(LayoutInflater.class, "inflate", new XC_MethodHook() {
+                @Override protected void afterHookedMethod(MethodHookParam param) {
+                    if (!themeEnabled || !(param.getResult() instanceof View)) return;
+                    View root = (View) param.getResult();
+                    View play = root.findViewById(cwpPlayId);
+                    if (play == null) play = root.findViewById(headerPlayId);
+                    if (play != null) {
+                        trackedPlayButtons.put(play, Boolean.TRUE);
+                        if (!prefs.getBoolean("theme_force_player_color", false)) return;
+                        themePlayButton(play, playerColor());
+                    }
+                }
+            });
+            XposedBridge.log("[SpotifyPlus] Forced player color surfaces installed");
+        } catch (Throwable throwable) {
+            XposedBridge.log(throwable);
+        }
+    }
+
+    private static void themePlayButton(View button, int color) {
+        button.setBackgroundTintList(ColorStateList.valueOf(color));
+        themePlayButtonChildren(button, bestTextColor(color));
+    }
+
+    private static void themePlayButtonChildren(View view, int onColor) {
+        if (view instanceof ImageView) ((ImageView) view).setImageTintList(ColorStateList.valueOf(onColor));
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) themePlayButtonChildren(group.getChildAt(i), onColor);
         }
     }
 
@@ -850,6 +980,8 @@ public class ThemeHook extends SpotifyHook {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     if (!themeEnabled) return;
+                    // Playlist option off = original gradient untouched.
+                    if (!prefs.getBoolean("theme_disable_album_gradients_playlists", false)) return;
                     try {
                         List<?> original = (List<?>) param.args[0];
 
@@ -864,7 +996,18 @@ public class ThemeHook extends SpotifyHook {
 
                         ArrayList<Object> flowingGradient = new ArrayList<>(2);
 
-                        flowingGradient.add(start);
+                        // Album style, not vivid artwork: the start stop was
+                        // kept as the artwork colour here, which is exactly
+                        // the vivid top playlists kept showing. Replace it
+                        // with the chosen playlist colour; if that colour
+                        // object cannot be built, keep the old start rather
+                        // than breaking the gradient (the empty catch below
+                        // leaves the original args untouched).
+                        Object themedStart = start;
+                        try {
+                            themedStart = XposedHelpers.newInstance(start.getClass(), playlistAccentColor());
+                        } catch (Throwable ignored) {}
+                        flowingGradient.add(themedStart);
                         flowingGradient.add(themedEnd);
 
                         param.args[0] = flowingGradient;
@@ -878,6 +1021,8 @@ public class ThemeHook extends SpotifyHook {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     if (!themeEnabled) return;
+                    // Playlist option off = original gradient untouched.
+                    if (!prefs.getBoolean("theme_disable_album_gradients_playlists", false)) return;
                     try {
                         List<?> original = (List<?>) param.args[1];
 
@@ -904,8 +1049,20 @@ public class ThemeHook extends SpotifyHook {
                         Object themedEnd = XposedHelpers.newInstance(finalColor.getClass(), baseBackground());
 
                         ArrayList<Object> themedStops = new ArrayList<>(3);
-                        themedStops.add(firstStop);
-                        themedStops.add(secondStop);
+                        // Same vivid-start problem as the 2-stop hook: the
+                        // first two stops are the artwork colours. Replace
+                        // them with the playlist colour (album style); if
+                        // those stops cannot be rebuilt, fall back to the
+                        // old behaviour (artwork stops kept, end themed).
+                        try {
+                            Object themedFirstColor = XposedHelpers.newInstance(firstColor.getClass(), playlistAccentColor());
+                            Object themedSecondColor = XposedHelpers.newInstance(secondColor.getClass(), playlistAccentColor());
+                            themedStops.add(XposedHelpers.newInstance(firstStop.getClass(), firstPosition, themedFirstColor));
+                            themedStops.add(XposedHelpers.newInstance(secondStop.getClass(), secondPosition, themedSecondColor));
+                        } catch (Throwable ignored) {
+                            themedStops.add(firstStop);
+                            themedStops.add(secondStop);
+                        }
                         themedStops.add(XposedHelpers.newInstance(finalStop.getClass(), 1.0f, themedEnd));
 
                         param.args[1] = themedStops;
@@ -933,6 +1090,10 @@ public class ThemeHook extends SpotifyHook {
                         @Override
                         protected void beforeHookedMethod(MethodHookParam param) {
                             if (!themeEnabled || !(param.args[0] instanceof List)) return;
+                            // Playlist option off = original Compose gradient untouched:
+                            // previously the end stop was replaced with baseBackground
+                            // even with the option off (a partial modification).
+                            if (!prefs.getBoolean("theme_disable_album_gradients_playlists", false)) return;
                             try {
                                 List<?> original = (List<?>) param.args[0];
                                 if (original.size() < 2) return;
@@ -941,9 +1102,38 @@ public class ThemeHook extends SpotifyHook {
                                 Object startValue = getInstanceFieldValue(start, long.class);
                                 Object endValue = getInstanceFieldValue(end, long.class);
                                 if (!(startValue instanceof Long) || !(endValue instanceof Long)) return;
-                                if (!AlbumGradientColors.matchesBaseFade(unpackColor((Long) startValue), unpackColor((Long) endValue),
-                                        context.getColor(gradientStartId), context.getColor(gradientEndId))) return;
+                                int startColor = unpackColor((Long) startValue);
+                                int endColor = unpackColor((Long) endValue);
+                                // Why playlists stayed vivid while albums looked dark:
+                                // the old gate only themed gradients whose start
+                                // was already a neutral base colour. A playlist
+                                // header gradient starts with the VIVID artwork
+                                // colour (daylist yellow/orange, etc.), so the
+                                // gate rejected it and the vivid gradient
+                                // survived untouched. Album headers looked dark
+                                // because their artwork/gradient was dark, not
+                                // because this hook themed them.
+                                // New gate: any header gradient fading to a
+                                // dark end (the header fade-to-background
+                                // shape) is themed like the album style:
+                                // every stop except the last becomes the
+                                // chosen playlist colour, the last becomes
+                                // the base background — dark top fading to
+                                // black, no vivid artwork gradient. A
+                                // gradient not fading to dark is left alone
+                                // so unrelated colourful gradients are not
+                                // collateral.
+                                boolean baseFade = AlbumGradientColors.matchesBaseFade(startColor, endColor,
+                                        context.getColor(gradientStartId), context.getColor(gradientEndId));
+                                boolean darkEnd = Color.alpha(endColor) == 0xFF
+                                        && (0.2126f * Color.red(endColor) + 0.7152f * Color.green(endColor)
+                                                + 0.0722f * Color.blue(endColor)) < 40;
+                                if (!baseFade && !darkEnd) return;
                                 ArrayList<Object> themed = new ArrayList<>(original);
+                                for (int i = 0; i < themed.size() - 1; i++) {
+                                    Object stop = themed.get(i);
+                                    themed.set(i, XposedHelpers.newInstance(stop.getClass(), packColor(playlistAccentColor())));
+                                }
                                 themed.set(themed.size() - 1, XposedHelpers.newInstance(end.getClass(), packColor(baseBackground())));
                                 param.args[0] = themed;
                             } catch (Throwable throwable) {
@@ -1534,6 +1724,11 @@ public class ThemeHook extends SpotifyHook {
 
     private void applyAlbumHeader(Object header, View appBar, Integer extractedColor, boolean modern) {
         if (!themeEnabled) return;
+        // Playlist option off = this header surface stays 100% original:
+        // no gradient replacement, no base background, no text tint, no play
+        // button tint. Previously this method tinted the preTitle with the
+        // theme accent and forced the background even with the option off.
+        if (!prefs.getBoolean("theme_disable_album_gradients_playlists", false)) return;
         if (appBar == null) return;
         View artworkBackground = appBar.findViewById(resourceId("id", modern ? "cwp_header_artwork_background" : "artwork_background"));
 
@@ -1545,7 +1740,14 @@ public class ThemeHook extends SpotifyHook {
             if (previous != null && previous.length > 0 && Color.alpha(previous[0]) != 0) extractedColor = previous[0];
         }
         // Preserve expanded artwork colors; only the pinned toolbar uses the animated backdrop.
-        int start = extractedColor == null ? baseBackground() : extractedColor | 0xFF000000;
+        // Option: playlist/album backgrounds use the theme accent instead of
+        // the colour extracted from the album artwork.
+        int start;
+        if (prefs.getBoolean("theme_disable_album_gradients_playlists", false)) {
+            start = playlistAccentColor();
+        } else {
+            start = extractedColor == null ? baseBackground() : extractedColor | 0xFF000000;
+        }
         GradientDrawable gradient = new AlbumArtworkGradient(start, baseBackground(), usesAnimatedBackground());
         if (artworkBackground != null) {
             artworkBackground.setBackgroundTintList(null);
@@ -1559,7 +1761,18 @@ public class ThemeHook extends SpotifyHook {
         themeTextTree(appBar.findViewById(resourceId("id", "toolbar_title")), textColor());
         View metadata = appBar.findViewById(resourceId("id", modern ? "cwp_header_metadataRow" : "metadata_container"));
         themeTextTree(metadata, subduedColor());
-        themeTextTree(appBar.findViewById(resourceId("id", modern ? "cwp_header_preTitle" : "preTitle")), accentColor());
+        themeTextTree(appBar.findViewById(resourceId("id", modern ? "cwp_header_preTitle" : "preTitle")), prefs.getBoolean("theme_disable_album_gradients_playlists", false) ? playlistAccentColor() : accentColor());
+        // The circular play button lives in the same header tree (modern
+        // cwp_play_button, legacy header_play_button) and is re-tinted by
+        // Spotify when artwork colors arrive, so tint it here on every header
+        // application, not just at inflation: player color while force is on,
+        // otherwise the chosen playlist accent while the playlist option is on.
+        View playButton = appBar.findViewById(resourceId("id", "cwp_play_button"));
+        if (playButton == null) playButton = appBar.findViewById(resourceId("id", "header_play_button"));
+        if (playButton != null) {
+            if (prefs.getBoolean("theme_force_player_color", false)) themePlayButton(playButton, playerColor());
+            else if (prefs.getBoolean("theme_disable_album_gradients_playlists", false)) themePlayButton(playButton, playlistAccentColor());
+        }
     }
 
     private static void themeTextTree(View view, int color) {
@@ -1980,6 +2193,8 @@ public class ThemeHook extends SpotifyHook {
 
     private void applyArtworkTheme(int artworkColor) {
         if (!themeEnabled || !prefs.getBoolean("auto_theme", false)) return;
+        // Forced player colour wins over an artwork-derived theme.
+        if (prefs.getBoolean("theme_force_player_color", false)) return;
         generateTheme(artworkColor, prefs.getString("auto_theme_mode", "neutral"), lpparm.classLoader);
     }
 
