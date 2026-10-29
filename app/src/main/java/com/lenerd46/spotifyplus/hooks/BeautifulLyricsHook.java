@@ -358,11 +358,19 @@ public class BeautifulLyricsHook extends SpotifyHook {
             var okHttp = bridge.findClass(
                     FindClass.create().matcher(ClassMatcher.create().usingStrings("method.isEmpty() == true",
                             " must not have a request body.", " must have a request body.")));
-            if (okHttp.size() != 1) throw new IllegalStateException("Ambiguous HTTP request builder: " + okHttp);
+            if (okHttp.isEmpty()) {
+                XposedBridge.log("[SpotifyPlus] No OkHttp request builder class found in 9.1.92, token capture skipped");
+                return;
+            }
+            // 9.1.92: the header writer is no longer void + public final with
+            // (String, String). Match any 2-String-param method in the builder
+            // class and filter by header name at call time instead.
             var requests = bridge.findMethod(FindMethod.create().searchInClass(okHttp)
-                    .matcher(MethodMatcher.create().returnType(void.class)
-                            .modifiers(Modifier.PUBLIC | Modifier.FINAL).paramTypes(String.class, String.class)));
-            if (requests.isEmpty()) throw new IllegalStateException("No OkHttp header writers found");
+                    .matcher(MethodMatcher.create().paramTypes(String.class, String.class)));
+            if (requests.isEmpty()) {
+                XposedBridge.log("[SpotifyPlus] No OkHttp header writers found in 9.1.92, token capture skipped");
+                return;
+            }
             for (var request : requests) XposedBridge.hookMethod(request.getMethodInstance(lpparm.classLoader), new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {

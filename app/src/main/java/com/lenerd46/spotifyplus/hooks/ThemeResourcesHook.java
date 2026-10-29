@@ -109,6 +109,13 @@ public final class ThemeResourcesHook implements IXposedHookInitPackageResources
 
     private static void hookCreativeWorkHeaderLayout(XC_InitPackageResources.InitPackageResourcesParam resparam) {
         try {
+            // 9.1.92 removed creative_work_header_layout (only the footer
+            // layout remains). Hooking a missing layout throws at resource
+            // init, so skip it instead of registering a broken hook.
+            if (resparam.res.getIdentifier("creative_work_header_layout", "layout", SPOTIFY_PACKAGE) == 0) {
+                XposedBridge.log(TAG + "creative_work_header_layout missing in this Spotify version, album-header hook skipped");
+                return;
+            }
             resparam.res.hookLayout(SPOTIFY_PACKAGE, "layout", "creative_work_header_layout", new XC_LayoutInflated() {
                 @Override
                 public void handleLayoutInflated(LayoutInflatedParam liparam) {

@@ -153,13 +153,15 @@ public class RemoveCreateButtonHook extends SpotifyHook {
                 }
             });
 
+            // 9.1.92: no int fields anymore; suspend-lambda shape is byte label,
+            // boolean, FlowCollector, Object[] (synthetic-public except boolean).
             var modifyDataListClass = bridge.findClass(FindClass.create().matcher(ClassMatcher.create()
                     .modifiers(Modifier.PUBLIC | Modifier.FINAL).interfaceCount(1).methodCount(3)
                     .fields(FieldsMatcher.create()
                             .count(4)
-                            .add(FieldMatcher.create().modifiers(Modifier.PUBLIC | Modifier.FINAL).type(int.class))
-                            .add(FieldMatcher.create().modifiers(Modifier.PUBLIC).type(int.class))
-                            .add(FieldMatcher.create().modifiers(Modifier.PUBLIC).type(Object[].class)))));
+                            .add(FieldMatcher.create().type(byte.class))
+                            .add(FieldMatcher.create().type(boolean.class))
+                            .add(FieldMatcher.create().type(Object[].class)))));
 
             // var things =
             // bridge.findClass(FindClass.create().matcher(ClassMatcher.create().modifiers(Modifier.PUBLIC
@@ -204,11 +206,21 @@ public class RemoveCreateButtonHook extends SpotifyHook {
                     // bridge.findField(FindField.create().searchInClass(modifyDataListClass).matcher(FieldMatcher.create().modifiers(Modifier.PUBLIC
                     // |
                     // Modifier.FINAL).type(int.class))).get(0).getFieldInstance(lpparm.classLoader);
-                    Field d = bridge
-                            .findField(FindField.create()
-                                    .searchInClass(Collections.singletonList(bridge.getClassData(param.thisObject.getClass())))
-                                    .matcher(FieldMatcher.create().modifiers(Modifier.PUBLIC).type(Object[].class)))
-                            .get(0).getFieldInstance(lpparm.classLoader);
+                    Field d;
+                    try {
+                        d = bridge
+                                .findField(FindField.create()
+                                        .searchInClass(Collections.singletonList(bridge.getClassData(param.thisObject.getClass())))
+                                        .matcher(FieldMatcher.create().modifiers(Modifier.PUBLIC).type(Object[].class)))
+                                .get(0).getFieldInstance(lpparm.classLoader);
+                    } catch (Throwable ignored) {
+                        // 9.1.92 Object[] field is synthetic-public; DexKit may miss it.
+                        d = null;
+                        for (Field f : param.thisObject.getClass().getDeclaredFields()) {
+                            if (f.getType() == Object[].class) { d = f; d.setAccessible(true); break; }
+                        }
+                        if (d == null) return;
+                    }
 
                     // int number = a.getInt(param.thisObject);
                     // if(number != 20) return;
