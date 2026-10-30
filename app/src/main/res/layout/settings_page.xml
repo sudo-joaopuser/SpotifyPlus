@@ -83,6 +83,29 @@
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="56dp"
                           android:orientation="horizontal" android:clickable="true" android:focusable="true"
+                          android:background="@drawable/row_click_bg" android:id="@+id/settings_lyrics_providers">
+
+                <ImageView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                           android:layout_gravity="center" android:paddingStart="6dp"
+                           android:contentDescription="Lyrics Providers" android:src="@drawable/music_note"/>
+
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                              android:orientation="vertical" android:layout_gravity="center_vertical"
+                              android:paddingLeft="8dp">
+
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                              android:text="Lyrics Providers" style="@style/TextAppearance.Material3.TitleMedium"
+                              android:paddingBottom="2dp"/>
+
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                              style="@style/TextAppearance.Material3.BodySmall"
+                              android:text="Sources tried in order when Spotify has no lyrics"
+                              android:textColor="?attr/colorOnSurfaceVariant"/>
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="56dp"
+                          android:orientation="horizontal" android:clickable="true" android:focusable="true"
                           android:background="@drawable/row_click_bg" android:id="@+id/settings_theme">
 
                 <ImageView android:layout_width="wrap_content" android:layout_height="wrap_content"

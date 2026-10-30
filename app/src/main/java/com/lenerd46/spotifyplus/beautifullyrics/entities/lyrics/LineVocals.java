@@ -57,7 +57,8 @@ public class LineVocals implements SyncableVocals {
         this.secondary = secondary;
 
         this.startTime = vocal.startTime;
-        this.duration = vocal.endTime - vocal.startTime;
+        double lineDuration = vocal.endTime - vocal.startTime;
+        this.duration = lineDuration > 0 ? lineDuration : 1.0;
 
         glowSpline = getSpline(glowRange);
         glowSpring = new Spring(0.0, 0.5, 1.0);
@@ -123,21 +124,28 @@ public class LineVocals implements SyncableVocals {
     }
 
     private void evaluateClassState() {
+        boolean themed = com.lenerd46.spotifyplus.hooks.ThemeHook.isThemeEnabled();
+        int baseText = themed ? com.lenerd46.spotifyplus.hooks.ThemeHook.getTextColor() : Color.WHITE;
+        int subdued = themed ? com.lenerd46.spotifyplus.hooks.ThemeHook.getSubduedColor() : 0xFFB3B3B3;
+        int r = Color.red(baseText), g = Color.green(baseText), b = Color.blue(baseText);
+        int sr = Color.red(subdued), sg = Color.green(subdued), sb = Color.blue(subdued);
+        int activeCol = Color.argb(secondary ? 217 : 255, r, g, b);
+        int activeGrad2 = Color.argb(secondary ? 80 : 120, r, g, b);
         if (state == LyricState.ACTIVE) {
-            lyricText.setTextColor(Color.argb(secondary ? 217 : 255, 255, 255, 255));
+            lyricText.setTextColor(activeCol);
             lyricText.setGradientColors(lineGradient
-                    ? new int[]{secondary ? 0xD9FFFFFF : 0xFFFFFFFF, secondary ? 0x50FFFFFF : 0x78FFFFFF}
-                    : new int[]{secondary ? 0xD9FFFFFF : 0xFFFFFFFF, secondary ? 0xD9FFFFFF : 0xFFFFFFFF});
+                    ? new int[]{activeCol, activeGrad2}
+                    : new int[]{activeCol, activeCol});
+            return;
         } else if (state == LyricState.SUNG) {
-            lyricText.setTextColor(Color.argb(secondary ? 72 : 100, 255, 255, 255));
+            lyricText.setTextColor(Color.argb(secondary ? 72 : 100, sr, sg, sb));
             lyricText.updateShadow(0f, 0f);
-
-//            updateLiveTextVisuals(0, 1.0 / 60);
+            return;
         } else {
-            lyricText.setTextColor(Color.argb(secondary ? 190 : 255, 255, 255, 255));
-            lyricText.setGradientColors(new int[]{secondary ? 0xBEFFFFFF : 0xFFFFFFFF, secondary ? 0x30FFFFFF : 0x3CFFFFFF});
-
-//            updateLiveTextVisuals(0, 1.0 / 60);
+            int idleCol = Color.argb(secondary ? 190 : 255, sr, sg, sb);
+            lyricText.setTextColor(idleCol);
+            lyricText.setGradientColors(new int[]{idleCol, Color.argb(secondary ? 48 : 60, sr, sg, sb)});
+            return;
         }
     }
 

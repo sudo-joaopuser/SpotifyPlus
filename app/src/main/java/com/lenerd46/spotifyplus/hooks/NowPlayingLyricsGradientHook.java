@@ -2,6 +2,7 @@ package com.lenerd46.spotifyplus.hooks;
 
 import android.app.Activity;
 import android.content.res.Configuration;
+import android.graphics.Color;
 import android.graphics.Rect;
 import android.media.MediaMetadata;
 import android.media.session.PlaybackState;
@@ -10,8 +11,11 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.view.Choreographer;
+import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import android.widget.TextView;
@@ -24,8 +28,12 @@ import com.google.gson.JsonParser;
 import com.lenerd46.spotifyplus.References;
 import com.lenerd46.spotifyplus.SpotifyTrack;
 import com.lenerd46.spotifyplus.beautifullyrics.entities.SyllableVocals;
+import com.lenerd46.spotifyplus.beautifullyrics.entities.GradientTextView;
+import com.lenerd46.spotifyplus.lyrics.LyricsProviders;
 import com.lenerd46.spotifyplus.beautifullyrics.entities.lyrics.SyllableMetadata;
 import com.lenerd46.spotifyplus.beautifullyrics.entities.lyrics.SyllableSyncedLyrics;
+import com.lenerd46.spotifyplus.beautifullyrics.entities.lyrics.LineSyncedLyrics;
+import com.lenerd46.spotifyplus.beautifullyrics.entities.lyrics.LineVocal;
 import com.lenerd46.spotifyplus.beautifullyrics.entities.lyrics.SyllableVocalSet;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -64,6 +72,9 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     private volatile List<TimedLine> timedLines = Collections.emptyList();
     private volatile String requestedTrackUri;
     private volatile String requestedTrackTitle;
+    private volatile String requestedTrackArtist = "";
+    private volatile String requestedTrackAlbum = "";
+    private volatile long requestedTrackDurationMs;
     private volatile String loadedTrackUri;
     private volatile String mediaTrackUri;
     private volatile String mediaTrackTitle;
@@ -71,11 +82,15 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     private volatile boolean nowPlayingActivityResumed;
     private volatile WeakReference<Activity> nowPlayingActivity = new WeakReference<>(null);
     private volatile boolean nativeLyricsFallback;
+    private volatile boolean npvLyricsLoading;
+    private TextView npvLoadingView;
+    private TextView npvGapView;
     private Call activeCall;
     private Field[] lineColorFields;
     private Class<?> lineModelClass;
     private final ThreadLocal<Integer> npvLineBuildDepth = ThreadLocal.withInitial(() -> 0);
     private final ThreadLocal<Integer> npvLineRenderDepth = ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Integer> npvRendererDepth = ThreadLocal.withInitial(() -> 0);
     private final List<WeakReference<Object>> npvLineModels = Collections.synchronizedList(new ArrayList<>());
     private final List<NpvLineColors> npvHiddenLineModels = Collections.synchronizedList(new ArrayList<>());
     private final List<WeakReference<Object>> npvRecomposeScopes = Collections.synchronizedList(new ArrayList<>());
@@ -88,6 +103,10 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     private Method npvMutableColorStateSetter;
     private Constructor<?> transparentColorConstructor;
     private FlexboxLayout lyricContainer;
+    private boolean videoBackgroundCached;
+    private long videoBackgroundCheckedAt;
+    private ViewGroup videoBackgroundHost;
+    private View lyricClickCatcher;
     private SyllableVocals activeVocals;
     private TimedLine displayedLine;
     private ViewGroup overlayHost;
@@ -96,6 +115,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     private long lastAnimationFrameNanos;
     private boolean framePosted;
     private volatile boolean trackLookupRunning;
+    private volatile String retriedTrackUri;
     private volatile long playbackPositionMs = -1;
     private volatile long playbackUpdateElapsed;
     private volatile float playbackSpeed = 1f;
@@ -107,8 +127,11 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
             framePosted = false;
             try {
                 updateFrame(frameTimeNanos);
-                if(isNowPlayingViewVisible() && overlayHost != null && overlayHost.isAttachedToWindow()) postFrame(0);
-                else if(isNowPlayingViewVisible() && !timedLines.isEmpty() && System.currentTimeMillis() - lastNpvRenderAt < 10000) postFrame(100);
+                // Keep polling while the NPV is visible, even with no lines
+                // or no anchor yet: the first frame often runs before Compose
+                // has laid out the title, and a dead loop here is exactly why
+                // the lyric only appeared after closing and reopening.
+                if(isNowPlayingViewVisible()) postFrame(overlayHost != null && overlayHost.isAttachedToWindow() ? 0 : 100);
             } catch(Throwable t) {
                 XposedBridge.log("[SpotifyPlus][NPV Lyrics] Animated lyric frame failed");
                 XposedBridge.log(t);
@@ -128,7 +151,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     if(!isNowPlayingActivity(activity)) return;
                     nowPlayingActivity = new WeakReference<>(activity);
                     nowPlayingActivityResumed = true;
-                    if(!nowPlayingLyricsVisible) return;
+                    if(References.currentActivity != null && LyricsProviders.isSpotifyStyle(References.currentActivity)) return;
                     if(hasLoadedCustomLyrics()) {
                         hideRememberedNpvLineModels();
                         notifyNpvColorStatesChanged();
@@ -136,6 +159,14 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     }
                     ensureTrackAndLyrics();
                     postFrame();
+                    // Compose may not have laid out the title on the first
+                    // resume yet; one bounded retry covers that window.
+                    mainHandler.postDelayed(() -> {
+                        if(isNowPlayingViewVisible()) {
+                            ensureTrackAndLyrics();
+                            postFrame();
+                        }
+                    }, 500);
                 }
             });
             XC_MethodHook hideWhenNowPlayingCloses = new XC_MethodHook() {
@@ -144,6 +175,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     Activity activity = (Activity) param.thisObject;
                     if(activity != nowPlayingActivity.get()) return;
                     nowPlayingActivityResumed = false;
+                    retriedTrackUri = null;
                     removeOverlay();
                     if(hasLoadedCustomLyrics()) {
                         restoreNpvLineModels();
@@ -154,9 +186,13 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
             };
             XposedHelpers.findAndHookMethod(Activity.class, "onPause", hideWhenNowPlayingCloses);
             XposedHelpers.findAndHookMethod(Activity.class, "onStop", hideWhenNowPlayingCloses);
-            Method npvRenderer = bridge.findMethod(FindMethod.create().matcher(MethodMatcher.create().returnType(Object.class).paramCount(5).usingStrings("lyrics_line"))).get(0).getMethodInstance(lpparm.classLoader);
+            List<MethodData> npvRendererCandidates = bridge.findMethod(FindMethod.create().matcher(MethodMatcher.create().returnType(Object.class).paramCount(5).usingStrings("lyrics_line")));
+            XposedBridge.log("[SpotifyPlus][NPV DexKit] link=npvRenderer candidates=" + npvRendererCandidates.size());
+            if (npvRendererCandidates.isEmpty()) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] link=npvRenderer: no candidates");
+            Method npvRenderer = npvRendererCandidates.get(0).getMethodInstance(lpparm.classLoader);
             List<MethodData> lineRendererCandidates = bridge.findMethod(FindMethod.create().matcher(MethodMatcher.create().modifiers(Modifier.PUBLIC | Modifier.STATIC | Modifier.FINAL).returnType(void.class).usingStrings("fontScale", "lyrics line color")));
-            if(lineRendererCandidates.size() != 1) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] Expected one semantic lyrics-line renderer but found " + lineRendererCandidates);
+            XposedBridge.log("[SpotifyPlus][NPV DexKit] link=lineRenderer candidates=" + lineRendererCandidates.size());
+            if(lineRendererCandidates.size() != 1) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] link=lineRenderer: expected 1, found " + lineRendererCandidates.size());
             MethodData lineRendererData = lineRendererCandidates.get(0);
             Method lineRenderer = lineRendererData.getMethodInstance(lpparm.classLoader);
             Class<?> resolvedLineModelClass = lineRenderer.getParameterTypes()[0];
@@ -167,11 +203,14 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                 if(!invoked.isMethod() || params.size() != 6 || !"long".equals(params.get(0)) || !String.class.getName().equals(params.get(2)) || !"int".equals(params.get(4)) || !"int".equals(params.get(5))) continue;
                 List<MethodData> getters = invoked.getReturnType().getMethods().stream().filter(method -> method.isMethod() && !Modifier.isStatic(method.getModifiers()) && method.getParamCount() == 0 && Object.class.getName().equals(method.getReturnTypeName())).collect(java.util.stream.Collectors.toList());
                 if(getters.size() != 1) continue;
-                if(colorAnimationData != null && !colorAnimationData.getDescriptor().equals(invoked.getDescriptor())) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] Found multiple Compose color-state producers");
+                if(colorAnimationData != null && !colorAnimationData.getDescriptor().equals(invoked.getDescriptor())) { XposedBridge.log("[SpotifyPlus][NPV DexKit] link=colorState ambiguous, skipped"); colorAnimationData = null; colorStateGetterData = null; break; }
                 colorAnimationData = invoked;
                 colorStateGetterData = getters.get(0);
             }
-            if(colorAnimationData == null || colorStateGetterData == null) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] Could not identify the animated lyrics-color state");
+            // Non-fatal link: losing only the colour-state hook must not
+            // kill the renderer/overlay hooks below.
+            XposedBridge.log("[SpotifyPlus][NPV DexKit] link=colorState found=" + (colorAnimationData != null && colorStateGetterData != null));
+            if (colorAnimationData != null && colorStateGetterData != null) {
             colorStateGetterName = colorStateGetterData.getMethodName();
             XposedBridge.hookMethod(colorAnimationData.getMethodInstance(lpparm.classLoader), new XC_MethodHook() {
                 @Override
@@ -179,20 +218,27 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     if(npvLineRenderDepth.get() != 0 && param.args.length > 2 && "lyrics line color".equals(param.args[2]) && param.getResult() != null) rememberNpvColorState(param.getResult());
                 }
             });
+            } else {
+                XposedBridge.log("[SpotifyPlus][NPV DexKit] link=colorState skipped, colour-state hiding disabled");
+            }
             MethodData scopeAccessorData = null;
             MethodData scopeInvalidatorData = null;
+            boolean scopeAmbiguous = false;
             for(MethodData invoked : lineRendererData.getInvokes()) {
+                if(scopeAmbiguous) break;
                 if(!invoked.isMethod() || invoked.getParamCount() != 0 || "void".equals(invoked.getReturnTypeName())) continue;
                 for(MethodData candidate : invoked.getReturnType().getMethods()) {
                     if(!candidate.isMethod() || Modifier.isStatic(candidate.getModifiers()) || candidate.getParamCount() != 0 || !"void".equals(candidate.getReturnTypeName())) continue;
                     boolean invalidatesScope = candidate.getInvokes().stream().anyMatch(call -> call.getParamTypeNames().equals(List.of(invoked.getReturnTypeName(), Object.class.getName())));
                     if(!invalidatesScope) continue;
-                    if(scopeAccessorData != null && !scopeAccessorData.getDescriptor().equals(invoked.getDescriptor())) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] Found multiple Compose recompose-scope accessors");
+                    if(scopeAccessorData != null && !scopeAccessorData.getDescriptor().equals(invoked.getDescriptor())) { XposedBridge.log("[SpotifyPlus][NPV DexKit] link=recomposeScope ambiguous, skipped"); scopeAccessorData = null; scopeInvalidatorData = null; scopeAmbiguous = true; break; }
                     scopeAccessorData = invoked;
                     scopeInvalidatorData = candidate;
                 }
             }
-            if(scopeAccessorData == null || scopeInvalidatorData == null) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] Could not identify the Compose recompose scope used by the lyrics line renderer");
+            // Non-fatal link, same rule as colour state above.
+            XposedBridge.log("[SpotifyPlus][NPV DexKit] link=recomposeScope found=" + (scopeAccessorData != null && scopeInvalidatorData != null));
+            if (scopeAccessorData != null && scopeInvalidatorData != null) {
             npvScopeInvalidator = scopeInvalidatorData.getMethodInstance(lpparm.classLoader);
             npvScopeInvalidator.setAccessible(true);
             XposedBridge.hookMethod(scopeAccessorData.getMethodInstance(lpparm.classLoader), new XC_MethodHook() {
@@ -201,8 +247,12 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     if(npvLineRenderDepth.get() != 0 && param.getResult() != null) rememberNpvRecomposeScope(param.getResult());
                 }
             });
+            } else {
+                XposedBridge.log("[SpotifyPlus][NPV DexKit] link=recomposeScope skipped, scope invalidation disabled");
+            }
             var lineModelBuilderCandidates = bridge.findMethod(FindMethod.create().matcher(MethodMatcher.create().returnType(Object.class).paramCount(5).addInvoke(MethodMatcher.create().name("<init>").declaredClass(resolvedLineModelClass))));
-            if(lineModelBuilderCandidates.isEmpty()) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] Could not identify the lyrics line-model builder");
+            XposedBridge.log("[SpotifyPlus][NPV DexKit] link=lineModelBuilder candidates=" + lineModelBuilderCandidates.size());
+            if(lineModelBuilderCandidates.isEmpty()) throw new IllegalStateException("[NowPlayingLyricsGradientHook/DexKit] link=lineModelBuilder: no candidates");
             for(var lineModelBuilderData : lineModelBuilderCandidates) XposedBridge.hookMethod(lineModelBuilderData.getMethodInstance(lpparm.classLoader), new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
@@ -232,6 +282,8 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                 protected void beforeHookedMethod(MethodHookParam param) {
                     Object state = param.args.length > 1 ? param.args[1] : null;
                     if(!isNowPlayingLyricsState(state)) return;
+                    param.setObjectExtra("spotifyplus_npv_renderer", Boolean.TRUE);
+                    npvRendererDepth.set(npvRendererDepth.get() + 1);
                     lastNpvRenderAt = System.currentTimeMillis();
                     nowPlayingLyricsVisible = hasVisibleLyrics(state);
                     if(isNowPlayingViewVisible()) {
@@ -241,12 +293,30 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                         mainHandler.post(NowPlayingLyricsGradientHook.this::removeOverlay);
                     }
                 }
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if(Boolean.TRUE.equals(param.getObjectExtra("spotifyplus_npv_renderer"))) {
+                        int depth = npvRendererDepth.get() - 1;
+                        if(depth > 0) npvRendererDepth.set(depth);
+                        else npvRendererDepth.remove();
+                    }
+                }
             });
             XposedBridge.hookMethod(lineRenderer, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
                     try {
-                        if(!isNowPlayingViewVisible() || nativeLyricsFallback || param.args.length < 2 || param.args[0] == null || !isNpvLineModel(param.args[0])) return;
+                        if(!isNowPlayingViewVisible() || nativeLyricsFallback || param.args.length < 2 || param.args[0] == null) return;
+                        // Scope the hide to the NPV small line only. The previous
+                        // version remembered and hid every model rendered while
+                        // the NPV was visible, which also hid the lyrics preview
+                        // card in the NPV (same activity, same renderer) and left
+                        // its "Letra" card empty. Preview models are never NPV
+                        // models and never render inside the NPV renderer, so
+                        // they are left alone here and keep their colours.
+                        boolean isNpvRender = isNpvLineModel(param.args[0]) || npvRendererDepth.get() > 0;
+                        if(!isNpvRender) return;
+                        if(!isNpvLineModel(param.args[0])) rememberNpvLineModel(param.args[0]);
                         param.setObjectExtra("spotifyplus_npv_line_render", Boolean.TRUE);
                         npvLineRenderDepth.set(npvLineRenderDepth.get() + 1);
                         lastNpvRenderAt = System.currentTimeMillis();
@@ -303,6 +373,13 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     mediaTrackTitle = title == null ? "" : title.toString();
                     lastTrackCheck = 0;
                     if(isNowPlayingViewVisible()) ensureTrackAndLyrics();
+                }
+            });
+            References.registerPlayerStateListener(state -> {
+                if(nowPlayingActivityResumed) {
+                    lastTrackCheck = 0;
+                    ensureTrackAndLyrics();
+                    postFrame();
                 }
             });
             XposedBridge.log("[SpotifyPlus] Now-playing gradient lyrics hook initialized");
@@ -439,6 +516,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     }
 
     private void invalidateNpvRecomposeScopes() {
+        if (npvScopeInvalidator == null) return;
         synchronized(npvRecomposeScopes) {
             for(int i = npvRecomposeScopes.size() - 1; i >= 0; i--) {
                 Object scope = npvRecomposeScopes.get(i).get();
@@ -455,6 +533,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     }
 
     private void rememberNpvColorState(Object state) {
+        if (colorStateGetterName == null) return;
         synchronized(npvColorStates) {
             for(int i = npvColorStates.size() - 1; i >= 0; i--) {
                 Object candidate = npvColorStates.get(i).get();
@@ -588,6 +667,9 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
 
     private void ensureTrackAndLyrics() {
         long now = System.currentTimeMillis();
+        // A new track is a fresh attempt: drop a stale native fallback now,
+        // on the main thread, or it gates every later check (see below).
+        if(!TextUtils.isEmpty(mediaTrackUri) && !mediaTrackUri.equals(requestedTrackUri)) nativeLyricsFallback = false;
         if(now - lastTrackCheck < 500 || trackLookupRunning) return;
         lastTrackCheck = now;
         trackLookupRunning = true;
@@ -602,9 +684,23 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     uri = track.uri;
                     title = track.title;
                 }
-                if(TextUtils.isEmpty(uri) || !isNowPlayingViewVisible() || uri.equals(requestedTrackUri)) return;
+                if(TextUtils.isEmpty(uri) || !isNowPlayingViewVisible()) return;
+                // Same track, already loaded: nothing to refetch. Same track
+                // with NO loaded lyrics (aborted first load, or a previous
+                // fallback): retry, or the provider is never attempted again
+                // and only the lyrics-button path (Beautiful Lyrics) works.
+                if(uri.equals(requestedTrackUri) && hasLoadedCustomLyrics()) return;
+                // One same-track retry per open session: without this guard
+                // the frame/renderer loop would refetch a genuinely
+                // lyric-less track every 500 ms while the NPV stays open.
+                // The guard clears on close, so reopening retries once.
+                if(uri.equals(requestedTrackUri) && uri.equals(retriedTrackUri)) return;
+                if(uri.equals(requestedTrackUri)) { nativeLyricsFallback = false; retriedTrackUri = uri; }
                 String resolvedUri = uri;
                 String resolvedTitle = title;
+                if(track == null) { try { SpotifyTrack t2 = References.getTrackTitle(lpparm, bridge); if(t2 != null && resolvedUri.equals(t2.uri)) track = t2; } catch(Throwable ignored) {} }
+                if(track != null) { requestedTrackArtist = track.artist == null ? "" : track.artist; requestedTrackAlbum = track.album == null ? "" : track.album; requestedTrackDurationMs = track.duration; }
+                else { requestedTrackArtist = ""; requestedTrackAlbum = ""; requestedTrackDurationMs = 0; }
                 requestedTrackUri = resolvedUri;
                 requestedTrackTitle = resolvedTitle;
                 loadedTrackUri = null;
@@ -625,6 +721,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     playbackSpeed = 1f;
                     playbackAdvancing = true;
                 }
+                npvLyricsLoading = true;
                 requestLyrics(resolvedUri);
             } catch(Throwable t) {
                 XposedBridge.log("[SpotifyPlus][NPV Lyrics] Failed to resolve the current track");
@@ -652,32 +749,56 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     if(!response.isSuccessful() || response.body() == null) {
                         int responseCode = response.code();
                         response.close();
-                        enableNativeFallback(trackUri, "HTTP " + responseCode);
+                        tryProviderSyllable(trackUri, "HTTP " + responseCode);
                         return;
                     }
                     String content;
                     try {
                         content = response.body().string();
                     } catch(IOException exception) {
-                        enableNativeFallback(trackUri, "failed to read response");
+                        tryProviderSyllable(trackUri, "failed to read response");
                         return;
                     } finally {
                         response.close();
                     }
                     if(content.isBlank()) {
-                        enableNativeFallback(trackUri, "empty response");
+                        tryProviderSyllable(trackUri, "empty response");
                         return;
                     }
                     try {
                         JsonObject data = JsonParser.parseString(content).getAsJsonObject();
+                        if(data != null && data.has("Type") && "Line".equals(data.get("Type").getAsString())) {
+                            // Styled-lyrics fix (proven by the 10:06 log): Devon returns
+                            // Line for these tracks, so the old code fell back to native
+                            // lyrics and the styled gradient never appeared. Render the
+                            // Line lyrics with the same gradient overlay instead.
+                            List<TimedLine> lineParsed = parseLineTimedLines(gson.fromJson(data, LineSyncedLyrics.class));
+                            if(!lineParsed.isEmpty() && trackUri.equals(requestedTrackUri)) {
+                                timedLines = Collections.unmodifiableList(lineParsed);
+                                loadedTrackUri = trackUri;
+                                XposedBridge.log("[SpotifyPlus][NPV Lyrics] Loaded " + lineParsed.size() + " line-timed lines (styled)");
+                                mainHandler.post(() -> {
+                                    postFrame(); // Restart loop even if not visible yet (updateFrame drops it if not visible)
+                                    if(!isNowPlayingViewVisible()) return;
+                                    hideRememberedNpvLineModels();
+                                    notifyNpvColorStatesChanged();
+                                    invalidateNpvRecomposeScopes();
+                                    postFrame();
+                                    if(overlayHost != null) overlayHost.invalidate();
+                                });
+                                return;
+                            }
+                            tryProviderSyllable(trackUri, "lyrics type Line");
+                            return;
+                        }
                         if(data == null || !data.has("Type") || !"Syllable".equals(data.get("Type").getAsString())) {
-                            enableNativeFallback(trackUri, data != null && data.has("Type") ? "lyrics type " + data.get("Type").getAsString() : "missing lyrics data");
+                            tryProviderSyllable(trackUri, data != null && data.has("Type") ? "lyrics type " + data.get("Type").getAsString() : "missing lyrics data");
                             return;
                         }
                         SyllableSyncedLyrics lyrics = gson.fromJson(data, SyllableSyncedLyrics.class);
                         List<TimedLine> parsed = parseTimedLines(lyrics);
                         if(parsed.isEmpty()) {
-                            enableNativeFallback(trackUri, "no timed lines");
+                            tryProviderSyllable(trackUri, "no timed lines");
                             return;
                         }
                         if(!trackUri.equals(requestedTrackUri)) return;
@@ -685,23 +806,28 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                         loadedTrackUri = trackUri;
                         XposedBridge.log("[SpotifyPlus][NPV Lyrics] Loaded " + parsed.size() + " syllable-timed lines");
                         mainHandler.post(() -> {
+                            // Restart the frame loop even if the view was
+                            // not visible at this instant; updateFrame itself
+                            // drops the overlay when it is not visible, and
+                            // without this a load that finishes early leaves
+                            // loaded lines with no loop until a reopen.
+                            postFrame();
                             if(!isNowPlayingViewVisible()) return;
                             hideRememberedNpvLineModels();
                             notifyNpvColorStatesChanged();
                             invalidateNpvRecomposeScopes();
-                            postFrame();
                             if(overlayHost != null) overlayHost.invalidate();
                         });
                     } catch(Throwable t) {
                         XposedBridge.log("[SpotifyPlus] Failed to parse SpotifyPlus lyrics API NPV response");
                         XposedBridge.log(t);
-                        enableNativeFallback(trackUri, "invalid lyrics response");
+                        tryProviderSyllable(trackUri, "invalid lyrics response");
                     }
                 }
 
                 @Override
                 public void onFailure(@NotNull Call call, @NotNull IOException e) {
-                    if(!call.isCanceled()) enableNativeFallback(trackUri, e.getMessage());
+                    if(!call.isCanceled()) tryProviderSyllable(trackUri, e.getMessage());
                 }
             });
         } catch(Throwable t) {
@@ -709,11 +835,127 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         }
     }
 
+    private void tryProviderSyllable(String trackUri, String reason) {
+        // Devon first, providers only on a miss or a line-only answer.
+        // Syllable only here: a line-only provider hit keeps searching
+        // inside LyricsProviders, and a miss falls back to native lyrics.
+        new Thread(() -> {
+            try {
+                android.app.Activity activity = References.currentActivity;
+                if(activity == null) activity = nowPlayingActivity.get();
+                if(activity == null) { mainHandler.post(() -> enableNativeFallback(trackUri, reason)); return; }
+                LyricsProviders.Result found = LyricsProviders.fetch(activity, requestedTrackTitle, requestedTrackArtist, requestedTrackAlbum, requestedTrackDurationMs, true);
+                if(found == null || found.toProviderLyrics().syllableLyrics == null) {
+                    // No syllable anywhere: use a line hit styled, before native fallback.
+                    tryProviderLine(trackUri, reason);
+                    return;
+                }
+                List<TimedLine> parsed = parseTimedLines(found.toProviderLyrics().syllableLyrics);
+                if(parsed.isEmpty()) { tryProviderLine(trackUri, reason); return; }
+                if(!trackUri.equals(requestedTrackUri)) return;
+                timedLines = Collections.unmodifiableList(parsed);
+                loadedTrackUri = trackUri;
+                XposedBridge.log("[SpotifyPlus][NPV Lyrics] Loaded " + parsed.size() + " syllable-timed lines from " + found.source.name());
+                mainHandler.post(() -> {
+                    postFrame(); // Restart loop even if not visible yet (updateFrame drops it if not visible)
+                    if(!isNowPlayingViewVisible()) return;
+                    hideRememberedNpvLineModels();
+                    notifyNpvColorStatesChanged();
+                    invalidateNpvRecomposeScopes();
+                    postFrame();
+                    if(overlayHost != null) overlayHost.invalidate();
+                });
+            } catch(Throwable t) {
+                XposedBridge.log("[SpotifyPlus][NPV Lyrics] Provider syllable fetch failed: " + t);
+                mainHandler.post(() -> enableNativeFallback(trackUri, reason));
+            }
+        }).start();
+    }
+
+    private void tryProviderLine(String trackUri, String reason) {
+        new Thread(() -> {
+            try {
+                android.app.Activity activity = References.currentActivity;
+                if(activity == null) activity = nowPlayingActivity.get();
+                if(activity == null) { mainHandler.post(() -> enableNativeFallback(trackUri, reason)); return; }
+                LyricsProviders.Result found = LyricsProviders.fetch(activity, requestedTrackTitle, requestedTrackArtist, requestedTrackAlbum, requestedTrackDurationMs, false, true);
+                if(found == null) { mainHandler.post(() -> enableNativeFallback(trackUri, reason)); return; }
+                List<TimedLine> parsed;
+                if(found.toProviderLyrics().syllableLyrics != null) parsed = parseTimedLines(found.toProviderLyrics().syllableLyrics);
+                else if(found.toProviderLyrics().lineLyrics != null) parsed = parseLineTimedLines(found.toProviderLyrics().lineLyrics);
+                else { mainHandler.post(() -> enableNativeFallback(trackUri, reason)); return; }
+                if(parsed.isEmpty() || !trackUri.equals(requestedTrackUri)) { mainHandler.post(() -> enableNativeFallback(trackUri, reason)); return; }
+                timedLines = Collections.unmodifiableList(parsed);
+                loadedTrackUri = trackUri;
+                XposedBridge.log("[SpotifyPlus][NPV Lyrics] Loaded " + parsed.size() + " styled lines from " + found.source.name());
+                mainHandler.post(() -> {
+                    postFrame(); // Restart loop even if not visible yet (updateFrame drops it if not visible)
+                    if(!isNowPlayingViewVisible()) return;
+                    hideRememberedNpvLineModels();
+                    notifyNpvColorStatesChanged();
+                    invalidateNpvRecomposeScopes();
+                    postFrame();
+                    if(overlayHost != null) overlayHost.invalidate();
+                });
+            } catch(Throwable t) {
+                XposedBridge.log("[SpotifyPlus][NPV Lyrics] Provider line fetch failed: " + t);
+                mainHandler.post(() -> enableNativeFallback(trackUri, reason));
+            }
+        }).start();
+    }
+
+    private List<TimedLine> parseLineTimedLines(LineSyncedLyrics lyrics) {
+        List<TimedLine> result = new ArrayList<>();
+        if(lyrics == null || lyrics.content == null) return result;
+        for(Object content : lyrics.content) {
+            try {
+                LineVocal vocal = gson.fromJson(gson.toJsonTree(content), LineVocal.class);
+                if(vocal == null || TextUtils.isEmpty(vocal.text)) continue;
+                // One syllable spanning the whole line: the gradient sweeps the
+                // line as a unit, which is the styled effect for line-only data.
+                SyllableMetadata syl = new SyllableMetadata();
+                syl.text = vocal.text; syl.startTime = vocal.startTime; syl.endTime = vocal.endTime; syl.isPartOfWord = false;
+                TimedLine line = TimedLine.create(List.of(syl), false);
+                if(line != null) result.add(line);
+            } catch(Throwable t) { XposedBridge.log(t); }
+        }
+        result.sort((left, right) -> Double.compare(left.startTime, right.startTime));
+        result = dedupConsecutive(result);
+        for(int i = 0; i < result.size(); i++) result.get(i).displayEndTime = i + 1 < result.size() ? result.get(i + 1).startTime : result.get(i).endTime + 0.5d;
+        return result;
+    }
+
+    /** Drops consecutive lines with the same normalized text (case/space
+     *  ignored), whatever their start times: a provider payload repeating
+     *  a line, or the native line re-emitted as the next line, must never
+     *  render twice in a row. Non-consecutive repeats are kept, and display
+     *  ends are recomputed by the callers after this. */
+    private static List<TimedLine> dedupConsecutive(List<TimedLine> lines) {
+        List<TimedLine> out = new ArrayList<>();
+        for (TimedLine line : lines) {
+            if (!out.isEmpty() && normalizeLineText(out.get(out.size() - 1)).equals(normalizeLineText(line))) continue;
+            out.add(line);
+        }
+        return out;
+    }
+
+    private static String normalizeLineText(TimedLine line) {
+        return lineText(line).replaceAll("\\s+", " ").trim().toLowerCase(java.util.Locale.ROOT);
+    }
+
+    private static String lineText(TimedLine line) {
+        StringBuilder sb = new StringBuilder();
+        if (line.syllables != null) for (SyllableMetadata s : line.syllables) sb.append(s.text);
+        return sb.toString();
+    }
+
     private void enableNativeFallback(String trackUri, String reason) {
         if(!trackUri.equals(requestedTrackUri)) return;
+        npvLyricsLoading = false;
         nativeLyricsFallback = true;
         XposedBridge.log("[SpotifyPlus][NPV Lyrics] Using Spotify lyrics fallback: " + reason);
         mainHandler.post(() -> {
+            if(lyricContainer != null && npvLoadingView != null) { lyricContainer.removeView(npvLoadingView); npvLoadingView = null; }
             restoreNpvLineModels();
             refreshNativeLyrics();
         });
@@ -752,6 +994,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
             }
         }
         result.sort((left, right) -> Double.compare(left.startTime, right.startTime));
+        result = dedupConsecutive(result);
         for(int i = 0; i < result.size(); i++) result.get(i).displayEndTime = i + 1 < result.size() ? result.get(i + 1).startTime : result.get(i).endTime + 0.5d;
         return result;
     }
@@ -768,24 +1011,84 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
             return;
         }
         ensureTrackAndLyrics();
-        if(timedLines.isEmpty() || !loadedTrackUriEqualsRequested()) return;
+        if(hasLoadedCustomLyrics()) npvLyricsLoading = false;
+        if(timedLines.isEmpty() || !loadedTrackUriEqualsRequested()) {
+            if(npvLyricsLoading && !nativeLyricsFallback) {
+                if(positionOverlay() && lyricContainer != null) {
+                    if(npvLoadingView == null || npvLoadingView.getParent() != lyricContainer) {
+                        lyricContainer.removeAllViews();
+                        npvLoadingView = new TextView(lyricContainer.getContext());
+                        npvLoadingView.setText("Loading Lyrics");
+                        npvLoadingView.setTextSize(16f);
+                        npvLoadingView.setTextColor(Color.WHITE);
+                        npvLoadingView.setClickable(false);
+                        lyricContainer.addView(npvLoadingView);
+                    }
+                    lyricContainer.setVisibility(View.VISIBLE);
+                }
+            } else if(lyricContainer != null && npvLoadingView != null) {
+                lyricContainer.removeView(npvLoadingView); npvLoadingView = null;
+            }
+            return;
+        }
         long position = getPlaybackPosition();
         if(position < 0) return;
         TimedLine line = findLine(position / 1000d);
         if(line == null) {
-            if(lyricContainer != null) lyricContainer.setVisibility(View.INVISIBLE);
+            // Lyric loaded but no speech right now (instrumental / gap):
+            // show "..." instead of an empty strip. This is not loading:
+            // loading only shows while npvLyricsLoading is true (above).
+            boolean positioned = positionOverlay();
+            if(positioned && lyricContainer != null) {
+                if(npvGapView == null || npvGapView.getParent() != lyricContainer) {
+                    lyricContainer.removeAllViews();
+                    npvLoadingView = null;
+                    GradientTextView gap = new GradientTextView(lyricContainer.getContext());
+                    boolean gapThemed = ThemeHook.isThemeEnabled();
+                    int gapBase = gapThemed ? ThemeHook.getTextColor() : Color.WHITE;
+                    int gapR = Color.red(gapBase), gapG = Color.green(gapBase), gapB = Color.blue(gapBase);
+                    int gapCol = Color.argb(255, gapR, gapG, gapB);
+                    gap.setText("...");
+                    gap.setTextSize(16f);
+                    gap.setTypeface(References.beautifulFont.get());
+                    gap.setTextColor(gapCol);
+                    gap.setGradientColors(new int[]{gapCol, Color.argb(120, gapR, gapG, gapB)});
+                    gap.setLineState(true);
+                    gap.setClickable(false);
+                    npvGapView = gap;
+                    lyricContainer.addView(npvGapView);
+                }
+                lyricContainer.setVisibility(View.VISIBLE);
+                displayedLine = null; activeVocals = null;
+            } else if(lyricContainer != null) {
+                lyricContainer.setVisibility(View.INVISIBLE);
+            }
             lastAnimationFrameNanos = 0;
             return;
         }
+        if(npvGapView != null) npvGapView = null;
         boolean positioned = positionOverlay();
         if(lyricContainer == null || overlayHost == null || !positioned) return;
+        if(displayedLine != null && normalizeLineText(displayedLine).equals(normalizeLineText(line))) line = displayedLine;
         boolean lineChanged = displayedLine != line;
         if(lineChanged) {
+            npvGapView = null;
+            npvLoadingView = null; npvLyricsLoading = false;
             lyricContainer.removeAllViews();
             lyricContainer.setJustifyContent(line.oppositeAligned ? JustifyContent.FLEX_END : JustifyContent.FLEX_START);
             activeVocals = new SyllableVocals(lyricContainer, line.syllables, false, false, line.oppositeAligned, References.currentActivity, 16);
             displayedLine = line;
             lastAnimationFrameNanos = 0;
+            // The frame's first positionOverlay() ran while the container
+            // still held the "Loading Lyrics" view, so the lyric views added
+            // here were never laid out with the real lyric geometry: on a
+            // static cover the lyric kept the Loading frame's position
+            // instead of the title-anchored one. Re-position now, with the
+            // real children in place, so the first lyric frame is already
+            // at the correct static position. Re-applying the same geometry
+            // changes nothing for video (same left/top/width, only padding
+            // differs, and that is re-applied identically too).
+            positionOverlay();
         }
         double deltaTime = lastAnimationFrameNanos == 0 ? 0d : Math.min((frameTimeNanos - lastAnimationFrameNanos) / 1000000000d, 0.1d);
         lastAnimationFrameNanos = frameTimeNanos;
@@ -832,11 +1135,21 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     }
 
     private boolean isNowPlayingViewVisible() {
-        if(!nowPlayingLyricsVisible || !nowPlayingActivityResumed) return false;
+        // Spotify Style: native lyrics untouched, no gradient overlay, no hiding native lines.
+        if(References.currentActivity != null && LyricsProviders.isSpotifyStyle(References.currentActivity)) return false;
+        if(!nowPlayingActivityResumed) return false;
         Activity activity = nowPlayingActivity.get();
         if(!isNowPlayingActivity(activity) || activity.isFinishing() || activity.isDestroyed()) return false;
         View decor = activity.getWindow().getDecorView();
-        return decor.isAttachedToWindow() && decor.isShown() && decor.getWindowVisibility() == View.VISIBLE;
+        if(!decor.isAttachedToWindow() || !decor.isShown() || decor.getWindowVisibility() != View.VISIBLE) return false;
+        // A native fallback must not gate resolution: with no native lyrics
+        // the renderer never runs, nowPlayingLyricsVisible stays false, and
+        // ensureTrack then returns before ever resetting the fallback —
+        // a deadlock broken only by the lyrics button, which uses its own
+        // flow. Rendering is still safe: updateFrame shows nothing when
+        // timedLines is empty, and native lines are only hidden once custom
+        // lyrics are actually loaded.
+        return true;
     }
 
     private boolean positionOverlay() {
@@ -845,6 +1158,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         Anchor anchor = findTitleAnchor(activity);
         if(anchor == null) {
             if(lyricContainer != null) lyricContainer.setVisibility(View.INVISIBLE);
+            if(lyricClickCatcher != null) lyricClickCatcher.setVisibility(View.GONE);
             return false;
         }
         ensureOverlay(anchor.host);
@@ -854,10 +1168,62 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         int top = Math.max(0, anchor.bounds.top - hostLocation[1]);
         int right = Math.min(anchor.host.getWidth(), anchor.bounds.right - hostLocation[0]);
         int bottom = Math.min(anchor.host.getHeight(), anchor.bounds.bottom - hostLocation[1]);
+        // Video NPV: the title anchor is narrow/centred, so the lyric strip
+        // used to be narrow too and a normal line wrapped in two. With a
+        // video background, stretch the strip to almost the full host width
+        // (the container's own 16dp side padding stays), so a normal line
+        // fits on one line. Static-cover NPV keeps the anchor width, which
+        // already works there. Top/height are unchanged, so controls stay clear.
+        boolean videoBg = isVideoBackground(activity, anchor.host);
+        if (videoBg) {
+            left = 0;
+            right = anchor.host.getWidth();
+        }
+        // Left-align the lyric text with the track title: the strip already
+        // starts at the title's left edge, but the container's 16dp left
+        // padding used to push the text ~16dp to the right of the title
+        // (visible on "Meu Sorriso", where the lyric sat right of the title
+        // and over the cover's bottom edge). Non-video: 8dp left padding, so the line sits a little right of
+        // the title's left edge (user request, NPV only). Video: the strip
+        // starts at the screen edge, so it used to sit at 16dp while the
+        // static lyric sits at the title margin (~24dp) + 8dp. Video only:
+        // 32dp left padding puts the video lyric at the same screen x as
+        // the static lyric. Static is untouched; the video strip itself
+        // still spans the full host width, only its text starts further right.
+        if (lyricContainer != null) {
+            int side = Math.round(16f * activity.getResources().getDisplayMetrics().density);
+            int leftPad = Math.round(8f * activity.getResources().getDisplayMetrics().density);
+            int videoLeftPad = Math.round(32f * activity.getResources().getDisplayMetrics().density);
+            lyricContainer.setPadding(videoBg ? videoLeftPad : leftPad, 0, side, 0);
+        }
         if(right <= left || bottom <= top) return false;
         lyricContainer.measure(View.MeasureSpec.makeMeasureSpec(right - left, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(bottom - top, View.MeasureSpec.EXACTLY));
         lyricContainer.layout(left, top, right, bottom);
+        updateLyricClickCatcher(anchor.host, left, top, right, bottom);
         return true;
+    }
+
+    // The lyric line itself lives in the host's ViewOverlay, which never
+    // receives touches, so a tap on it did nothing. This real child view,
+    // only over the lyric strip, opens the custom Beautiful Lyrics screen.
+    private void updateLyricClickCatcher(ViewGroup host, int left, int top, int right, int bottom) {
+        if(!(host instanceof FrameLayout)) return;
+        if(lyricClickCatcher == null) {
+            lyricClickCatcher = new View(host.getContext());
+            lyricClickCatcher.setClickable(true);
+            lyricClickCatcher.setFocusable(true);
+            lyricClickCatcher.setOnClickListener(v -> {
+                Activity act = nowPlayingActivity.get();
+                if(act == null) act = References.currentActivity;
+                if(act != null) BeautifulLyricsHook.showOverlay(act, true);
+            });
+            host.addView(lyricClickCatcher);
+        }
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(right - left, bottom - top);
+        params.leftMargin = left;
+        params.topMargin = top;
+        lyricClickCatcher.setLayoutParams(params);
+        lyricClickCatcher.setVisibility(View.VISIBLE);
     }
 
     private Anchor findTitleAnchor(Activity activity) {
@@ -868,7 +1234,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         Rect titleBounds = findTitleTextViewBounds(decor, title);
         Anchor anchor = titleBounds == null ? findAnchor(decor, title) : new Anchor((ViewGroup) decor, titleBounds);
         if(anchor == null) return null;
-        int spacing = Math.round(48f * activity.getResources().getDisplayMetrics().density);
+        int spacing = Math.round(12f * activity.getResources().getDisplayMetrics().density);
         int height = Math.round(40f * activity.getResources().getDisplayMetrics().density);
         int[] hostLocation = new int[2];
         anchor.host.getLocationOnScreen(hostLocation);
@@ -904,6 +1270,29 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         }
     }
 
+    private boolean isVideoBackground(Activity activity, ViewGroup host) {
+        long now = SystemClock.elapsedRealtime();
+        if (host == videoBackgroundHost && now - videoBackgroundCheckedAt < 1000) return videoBackgroundCached;
+        videoBackgroundHost = host;
+        videoBackgroundCheckedAt = now;
+        int sw = activity.getResources().getDisplayMetrics().widthPixels;
+        int sh = activity.getResources().getDisplayMetrics().heightPixels;
+        videoBackgroundCached = findLargeVideoView(host, sw, sh);
+        return videoBackgroundCached;
+    }
+
+    private boolean findLargeVideoView(View v, int sw, int sh) {
+        if (v == null || v.getVisibility() != View.VISIBLE) return false;
+        if ((v instanceof SurfaceView || v instanceof TextureView) && v.getWidth() >= sw / 2 && v.getHeight() >= sh / 2) return true;
+        String cn = v.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        if (cn.contains("video") && v.getWidth() >= sw / 2 && v.getHeight() >= sh / 2) return true;
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0; i < g.getChildCount(); i++) if (findLargeVideoView(g.getChildAt(i), sw, sh)) return true;
+        }
+        return false;
+    }
+
     private void ensureOverlay(ViewGroup host) {
         if(overlayHost == host && lyricContainer != null) return;
         removeOverlay();
@@ -914,6 +1303,8 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         lyricContainer.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         lyricContainer.setClipChildren(false);
         lyricContainer.setClipToPadding(false);
+        int sidePadding = Math.round(16f * host.getResources().getDisplayMetrics().density);
+        lyricContainer.setPadding(sidePadding, 0, sidePadding, 0);
         lyricContainer.setFlexWrap(FlexWrap.WRAP);
         lyricContainer.setJustifyContent(JustifyContent.FLEX_START);
         host.getOverlay().add(lyricContainer);
@@ -1000,6 +1391,11 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         framePosted = false;
         choreographer.removeFrameCallback(frameCallback);
         if(overlayHost != null && lyricContainer != null) overlayHost.getOverlay().remove(lyricContainer);
+        if(lyricClickCatcher != null) {
+            ViewGroup parent = (ViewGroup) lyricClickCatcher.getParent();
+            if(parent != null) parent.removeView(lyricClickCatcher);
+            lyricClickCatcher = null;
+        }
         lyricContainer = null;
         activeVocals = null;
         displayedLine = null;

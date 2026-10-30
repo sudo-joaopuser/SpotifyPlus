@@ -69,6 +69,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class ThemeHook extends SpotifyHook {
 
+    // Palette provider content classes already logged once, so the next
+    // device log shows the real runtime class without per-frame spam.
+    private static final Set<String> loggedPaletteContentClasses = Collections.synchronizedSet(new HashSet<>());
+
     public static final String ANIMATED_BACKGROUND_PREFERENCE = "experiment_animated_theme_background";
     private static volatile boolean animatedBackgroundEnabled;
     private static final AnimatedThemeBackground animatedBackground = new AnimatedThemeBackground();
@@ -88,6 +92,13 @@ public class ThemeHook extends SpotifyHook {
     private static int tintedPress() { return usesAnimatedBackground() ? AnimatedThemePalette.PRESS : TINTED_PRESS; }
     private static int backgroundHighlight() { return usesAnimatedBackground() ? AnimatedThemePalette.HIGHLIGHT : BACKGROUND_HIGHLIGHT; }
     private static int backgroundPress() { return usesAnimatedBackground() ? AnimatedThemePalette.PRESS : BACKGROUND_PRESS; }
+    public static boolean isThemeEnabled() { return themeEnabled; }
+    public static int getBaseBackground() { return baseBackground(); }
+    public static int getTextColor() { return textColor(); }
+    public static int getSubduedColor() { return subduedColor(); }
+    public static int getAccentColor() { return accentColor(); }
+    public static int getSurfaceColor() { return surfaceColor(); }
+    public static int getOnAccentColor() { return onAccentColor(); }
     private static int accentColor() {
         return usesAnimatedBackground() ? ensureContrast(ACCENT, 0xFF666666, Color.WHITE, 3.0) : ACCENT;
     }
@@ -389,8 +400,21 @@ public class ThemeHook extends SpotifyHook {
                         // NPV, headers and other artwork surfaces keep
                         // their artwork colours.
                         Object content = param.args.length > 1 ? param.args[1] : null;
-                        if (themeEnabled && content != null
-                                && content.getClass().getName().toLowerCase(java.util.Locale.ROOT).contains("lyric")) {
+                        // Native fullscreen lyrics colours come from the server
+                        // (ColorLyricsResponse ColorData), not the Encore palette,
+                        // so this recolor cannot fix them; the Modded path is the
+                        // BeautifulLyrics overlay. Log each distinct content class
+                        // once so the device log proves what really flows here
+                        // (Compose elements are obfuscated p.*, "lyric" in the
+                        // name is not guaranteed) instead of trusting the gate.
+                        String contentClass = content == null ? "null" : content.getClass().getName();
+                        if (loggedPaletteContentClasses.size() < 50 && loggedPaletteContentClasses.add(contentClass)) {
+                            XposedBridge.log("[SpotifyPlus][ThemeLyrics] palette content class: " + contentClass);
+                        }
+                        boolean isLyricContent = content != null && contentClass.toLowerCase(java.util.Locale.ROOT).contains("lyric");
+                        if (isLyricContent && com.lenerd46.spotifyplus.lyrics.LyricsProviders.isSpotifyStyle(context)) {
+                            param.args[0] = original;
+                        } else if (themeEnabled && isLyricContent) {
                             param.args[0] = createLightEncorePalette(original, baseBackground(), backgroundHighlight(), backgroundPress());
                             XposedBridge.log("[SpotifyPlus][ThemeLyrics] Forced theme palette for lyrics content: " + content.getClass().getName());
                         } else {

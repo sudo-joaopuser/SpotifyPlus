@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.circularreveal.coordinatorlayout.CircularRevealCoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/settings_root" android:layout_width="match_parent" android:layout_height="match_parent" android:fitsSystemWindows="true" android:background="@color/spotifyplus_background">
+        <com.google.android.material.appbar.AppBarLayout android:id="@+id/appbar" android:layout_width="match_parent" android:layout_height="?attr/actionBarSize" app:liftOnScroll="true">
+                <com.google.android.material.appbar.MaterialToolbar android:id="@+id/providers_toolbar" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#272727" android:gravity="center" app:titleCentered="true" app:title="Lyrics Providers" app:titleTextAppearance="@style/TextAppearance.Material3.TitleMedium" app:navigationIcon="?attr/homeAsUpIndicator" />
+        </com.google.android.material.appbar.AppBarLayout>
+        <androidx.core.widget.NestedScrollView android:layout_width="match_parent" android:layout_height="match_parent" android:paddingTop="16dp" android:paddingStart="16dp" android:clickable="true" android:focusable="true" app:layout_behavior="@string/appbar_scrolling_view_behavior">
+                <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Tried in this order, only when Spotify has no lyrics. First hit wins." style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" android:paddingBottom="16dp" />
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="lrc.red" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Apple timings by recording, syllable by syllable" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_lrc_red" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="BiniLyrics" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="The same Apple timings, matched on the recording itself" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_bini_lyrics" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="BetterLyrics" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Apple Music timings, word by word" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_better_lyrics" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="BetterLyrics Portato" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="QQ Music karaoke timings through BetterLyrics" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_better_lyrics_portato" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PaxSenix" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Apple Music timings through PaxSenix; API key required" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_paxsenix" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PaxSenix: Spotify" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Spotify lyrics via PaxSenix; API key required" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_paxsenix_spotify" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PaxSenix: Musixmatch" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Musixmatch timings via PaxSenix; API key required" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_paxsenix_musixmatch" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LyricsPlus" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Syllable by syllable, on community mirrors" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_lyrics_plus" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Unison" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Contributed by listeners, so it has what nobody licensed" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_unison" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="KuGou" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Whole lines, strong outside the English catalogue" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_kugou" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="LRCLIB" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Whole lines only, and always up" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_lrclib" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Musixmatch" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Whole lines; needs a rotating signing key, may return nothing" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_musixmatch" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg">
+                                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Genius" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Plain text fallback, massive web catalogue" style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" />
+                                </LinearLayout>
+                                <com.google.android.material.materialswitch.MaterialSwitch android:id="@+id/switch_provider_genius" android:layout_width="wrap_content" android:layout_height="wrap_content" android:paddingHorizontal="8dp" android:checked="true" />
+                        </LinearLayout>
+                        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginBottom="16dp" android:background="@drawable/row_click_bg" android:padding="12dp">
+                                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PaxSenix API Key" android:textColor="@color/white" android:textSize="15sp" android:paddingBottom="4dp" />
+                                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Required for the three PaxSenix providers. Without it they are skipped. Never hardcoded." style="@style/TextAppearance.Material3.BodySmall" android:textColor="?attr/colorOnSurfaceVariant" android:paddingBottom="8dp" />
+                                <com.google.android.material.textfield.TextInputLayout android:layout_width="match_parent" android:layout_height="wrap_content" app:boxStrokeColor="#55FFFFFF" app:hintTextColor="#AAFFFFFF">
+                                        <com.google.android.material.textfield.TextInputEditText android:id="@+id/input_paxsenix_key" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="textPassword" />
+                                </com.google.android.material.textfield.TextInputLayout>
+                        </LinearLayout>
+                </LinearLayout>
+        </androidx.core.widget.NestedScrollView>
+</com.google.android.material.circularreveal.coordinatorlayout.CircularRevealCoordinatorLayout>

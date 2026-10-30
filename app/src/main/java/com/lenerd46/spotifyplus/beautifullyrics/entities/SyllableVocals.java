@@ -283,18 +283,28 @@ public class SyllableVocals implements SyncableVocals {
     private void evaluateClassState() {
         try {
             container.post(() -> {
+                boolean themed = com.lenerd46.spotifyplus.hooks.ThemeHook.isThemeEnabled();
+                int baseText = themed ? com.lenerd46.spotifyplus.hooks.ThemeHook.getTextColor() : Color.WHITE;
+                int subdued = themed ? com.lenerd46.spotifyplus.hooks.ThemeHook.getSubduedColor() : 0xFFB3B3B3;
+                int r = Color.red(baseText), g = Color.green(baseText), b = Color.blue(baseText);
+                int sr = Color.red(subdued), sg = Color.green(subdued), sb = Color.blue(subdued);
+                int activeCol = Color.argb(secondary ? 217 : 255, r, g, b);
+                int[] activeGrad = new int[] { activeCol, Color.argb(secondary ? 80 : 120, r, g, b) };
+                int sungCol = Color.argb(secondary ? 72 : 100, sr, sg, sb);
+                int idleCol = Color.argb(secondary ? 190 : 255, sr, sg, sb);
+                int[] idleGrad = new int[] { idleCol, Color.argb(secondary ? 48 : 60, sr, sg, sb) };
                 if(this.state == LyricState.ACTIVE) {
                     for(var syllable : this.syllables) {
                         if(syllable.type.equals("Letters")) {
                             for(var letter : syllable.letters) {
                                 GradientTextView text = (GradientTextView) letter.liveText.object;
-                                text.setGradientColors(new int[] { secondary ? 0xD9FFFFFF : 0xFFFFFFFF, secondary ? 0x50FFFFFF : 0x78FFFFFF});
-                                text.setTextColor(Color.argb(secondary ? 217 : 255, 255, 255, 255));
+                                text.setGradientColors(activeGrad);
+                                text.setTextColor(activeCol);
                             }
                         } else {
                             GradientTextView text = (GradientTextView) syllable.liveText.object;
-                            text.setGradientColors(new int[] { secondary ? 0xD9FFFFFF : 0xFFFFFFFF, secondary ? 0x50FFFFFF : 0x78FFFFFF});
-                            text.setTextColor(Color.argb(secondary ? 217 : 255, 255, 255, 255));
+                            text.setGradientColors(activeGrad);
+                            text.setTextColor(activeCol);
                         }
                     }
                 } else if(this.state == LyricState.SUNG) {
@@ -302,12 +312,12 @@ public class SyllableVocals implements SyncableVocals {
                         if(syllable.type.equals("Letters")) {
                             for(var letter : syllable.letters) {
                                 GradientTextView text = (GradientTextView) letter.liveText.object;
-                                text.setTextColor(Color.argb(secondary ? 72 : 100, 255, 255, 255));
+                                text.setTextColor(sungCol);
                                 text.updateShadow(0f, 0f);
                             }
                         } else {
                             GradientTextView text = (GradientTextView) syllable.liveText.object;
-                            text.setTextColor(Color.argb(secondary ? 72 : 100, 255, 255, 255));
+                            text.setTextColor(sungCol);
                             text.updateShadow(0f, 0f);
                         }
                     }
@@ -322,14 +332,14 @@ public class SyllableVocals implements SyncableVocals {
                         if(syllable.type.equals("Letters")) {
                             for(var letter : syllable.letters) {
                                 GradientTextView text = (GradientTextView) letter.liveText.object;
-                                text.setTextColor(Color.argb(secondary ? 190 : 255, 255, 255, 255));
-                            text.setGradientColors(new int[] { secondary ? 0xBEFFFFFF : 0xFFFFFFFF, secondary ? 0x30FFFFFF : 0x3CFFFFFF});
+                                text.setTextColor(idleCol);
+                            text.setGradientColors(idleGrad);
                                 text.updateShadow(0f, 0f);
                             }
                         } else {
                             GradientTextView text = (GradientTextView) syllable.liveText.object;
-                            text.setTextColor(Color.argb(secondary ? 190 : 255, 255, 255, 255));
-                            text.setGradientColors(new int[] { secondary ? 0xBEFFFFFF : 0xFFFFFFFF, secondary ? 0x30FFFFFF : 0x3CFFFFFF});
+                            text.setTextColor(idleCol);
+                            text.setGradientColors(idleGrad);
                             text.updateShadow(0f, 0f);
                         }
                     }

@@ -111,9 +111,17 @@ public class References {
                         saved = Boolean.parseBoolean(savedValue);
                     }
 
-//                    long duration = (Long) XposedHelpers.callMethod(state, "duration");
+                    // 9.1.92: PlayerState.duration() returns a custom Optional
+                    // (p.d5p0), not Long, so instanceof Long was never true and
+                    // duration stayed 0. Unwrap it; metadata has no duration key.
+                    long duration = unwrapDuration(state);
+                    if (duration <= 0 && metadata != null && metadata.containsKey("duration")) {
+                        try {
+                            duration = Long.parseLong(String.valueOf(metadata.get("duration")));
+                        } catch (Exception ignored) {}
+                    }
 
-                    return new SpotifyTrack(title, artist, album, uri, position, color, timestamp, imageId, 0, saved);
+                    return new SpotifyTrack(title, artist, album, uri, position, color, timestamp, imageId, duration, saved);
                 } else {
                     XposedBridge.log("[SpotifyPlus] ContextTrack not found!");
                     return null;
@@ -125,6 +133,33 @@ public class References {
         } catch(Exception e) {
             Log.e("SpotifyPlus", "Error getting track information", e);
             return null;
+        }
+    }
+
+    // Unwraps PlayerState.duration(): Number directly, else the custom
+    // Optional (c() = present, b()/h() = value). Any failure yields 0.
+    private static long unwrapDuration(Object state) {
+        if (state == null) return 0;
+        try {
+            Object durObj = XposedHelpers.callMethod(state, "duration");
+            if (durObj == null) return 0;
+            if (durObj instanceof Number) return ((Number) durObj).longValue();
+            try {
+                Object present = XposedHelpers.callMethod(durObj, "c");
+                if (present instanceof Boolean && !(Boolean) present) return 0;
+            } catch (Exception ignored) {}
+            for (String getter : new String[]{"b", "h"}) {
+                try {
+                    Object value = XposedHelpers.callMethod(durObj, getter);
+                    if (value instanceof Number) return ((Number) value).longValue();
+                } catch (Exception ignored) {}
+            }
+            Matcher m = DIGITS.matcher(durObj.toString());
+            if (m.find()) return Long.parseLong(m.group());
+            return 0;
+        } catch (Exception e) {
+            XposedBridge.log("[SpotifyPlus] duration unwrap failed");
+            return 0;
         }
     }
 

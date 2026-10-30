@@ -39,6 +39,7 @@ import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 import com.lenerd46.spotifyplus.*;
 import com.lenerd46.spotifyplus.beautifullyrics.translation.LyricsTranslationService;
+import com.lenerd46.spotifyplus.lyrics.LyricsProviders;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
@@ -324,6 +325,7 @@ public class RemoveCreateButtonHook extends SpotifyHook {
 
                             View generalSettings = settingsPage.findViewById(R.id.settings_general);
                             View lyricsSettings = settingsPage.findViewById(R.id.settings_lyrics);
+                            View providersSettings = settingsPage.findViewById(R.id.settings_lyrics_providers);
                             View themeSettings = settingsPage.findViewById(R.id.settings_theme);
                             View experimentalSettings = settingsPage.findViewById(R.id.settings_experimental);
                             // View scriptingSettings = settingsPage.findViewById(R.id.settings_scripting);
@@ -574,6 +576,43 @@ public class RemoveCreateButtonHook extends SpotifyHook {
                                 library.setChecked(page.equals("LIBRARY"));
                             });
 
+                            providersSettings.setOnClickListener(v -> {
+                                View pview = inflater.inflate(R.layout.lyrics_providers_settings_page, root, false);
+                                root.addView(pview);
+                                animatePageIn(pview);
+                                MaterialToolbar ptoolbar = pview.findViewById(R.id.providers_toolbar);
+                                ptoolbar.setNavigationOnClickListener(w -> {
+                                    ViewParent parent = pview.getParent();
+                                    if (parent instanceof ViewGroup) animatePageOut((ViewGroup) parent, () -> ((ViewGroup) parent).removeView(pview));
+                                });
+                                int[] switchIds = {R.id.switch_provider_lrc_red, R.id.switch_provider_bini_lyrics,
+                                        R.id.switch_provider_better_lyrics, R.id.switch_provider_better_lyrics_portato,
+                                        R.id.switch_provider_paxsenix, R.id.switch_provider_paxsenix_spotify,
+                                        R.id.switch_provider_paxsenix_musixmatch, R.id.switch_provider_lyrics_plus,
+                                        R.id.switch_provider_unison, R.id.switch_provider_kugou,
+                                        R.id.switch_provider_lrclib, R.id.switch_provider_musixmatch,
+                                        R.id.switch_provider_genius};
+                                LyricsProviders.Provider[] providers = LyricsProviders.Provider.values();
+                                for (int i = 0; i < providers.length && i < switchIds.length; i++) {
+                                    LyricsProviders.Provider provider = providers[i];
+                                    MaterialSwitch sw = pview.findViewById(switchIds[i]);
+                                    if (sw == null) continue;
+                                    sw.setChecked(LyricsProviders.isEnabled(activity, provider));
+                                    sw.setOnCheckedChangeListener((button, value) -> LyricsProviders.setEnabled(activity, provider, value));
+                                }
+                                TextInputEditText keyInput = pview.findViewById(R.id.input_paxsenix_key);
+                                if (keyInput != null) {
+                                    keyInput.setText(LyricsProviders.paxSenixKey(activity));
+                                    keyInput.addTextChangedListener(new android.text.TextWatcher() {
+                                        @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                                        @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+                                        @Override public void afterTextChanged(android.text.Editable editable) {
+                                            prefs.edit().putString("lyrics_paxsenix_api_key", editable.toString().trim()).apply();
+                                        }
+                                    });
+                                }
+                            });
+
                             lyricsSettings.setOnClickListener(v -> {
                                 View view = inflater.inflate(R.layout.beautiful_lyrics_settings_page, root, false);
                                 root.addView(view);
@@ -587,6 +626,22 @@ public class RemoveCreateButtonHook extends SpotifyHook {
                                         animatePageOut((ViewGroup) parent, () -> ((ViewGroup) parent).removeView(view));
                                     }
                                 });
+
+                                MaterialRadioButton styleSpotify = view.findViewById(R.id.rb_lyrics_style_spotify);
+                                MaterialRadioButton styleModded = view.findViewById(R.id.rb_lyrics_style_modded);
+                                if (styleSpotify != null && styleModded != null) {
+                                    boolean spotifyStyle = LyricsProviders.isSpotifyStyle(activity);
+                                    styleSpotify.setChecked(spotifyStyle);
+                                    styleModded.setChecked(!spotifyStyle);
+                                    styleSpotify.setOnClickListener(c -> {
+                                        prefs.edit().putString("lyrics_style_mode", "spotify").apply();
+                                        styleSpotify.setChecked(true); styleModded.setChecked(false);
+                                    });
+                                    styleModded.setOnClickListener(c -> {
+                                        prefs.edit().putString("lyrics_style_mode", "modded").apply();
+                                        styleSpotify.setChecked(false); styleModded.setChecked(true);
+                                    });
+                                }
 
                                 MaterialRadioButton visualBeautiful = view.findViewById(R.id.rb_beautiful_lyrics_anim);
                                 MaterialRadioButton visualApple = view.findViewById(R.id.rb_apple_music_anim);
