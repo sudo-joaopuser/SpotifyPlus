@@ -84,6 +84,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     private volatile boolean nativeLyricsFallback;
     private volatile boolean npvLyricsLoading;
     private TextView npvLoadingView;
+    private TextView npvFallbackView;
     private TextView npvGapView;
     private Call activeCall;
     private Field[] lineColorFields;
@@ -1016,6 +1017,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         if(hasLoadedCustomLyrics()) npvLyricsLoading = false;
         if(timedLines.isEmpty() || !loadedTrackUriEqualsRequested()) {
             if(npvLyricsLoading && !nativeLyricsFallback) {
+                if(npvFallbackView != null && lyricContainer != null) { lyricContainer.removeView(npvFallbackView); npvFallbackView = null; }
                 if(positionOverlay() && lyricContainer != null) {
                     if(npvLoadingView == null || npvLoadingView.getParent() != lyricContainer) {
                         lyricContainer.removeAllViews();
@@ -1028,6 +1030,22 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
                     }
                     lyricContainer.setVisibility(View.VISIBLE);
                 }
+            } else if(positionOverlay() && lyricContainer != null) {
+                // No synced lyrics and not loading: show "Lyrics >" inside
+                // the existing lyric strip. The strip already has the click
+                // catcher that opens the Beautiful Lyrics screen, so this
+                // view stays non-clickable and adds no new touch handling.
+                if(npvLoadingView != null) { lyricContainer.removeView(npvLoadingView); npvLoadingView = null; }
+                if(npvFallbackView == null || npvFallbackView.getParent() != lyricContainer) {
+                    lyricContainer.removeAllViews();
+                    npvFallbackView = new TextView(lyricContainer.getContext());
+                    npvFallbackView.setText("Lyrics >");
+                    npvFallbackView.setTextSize(16f);
+                    npvFallbackView.setTextColor(Color.WHITE);
+                    npvFallbackView.setClickable(false);
+                    lyricContainer.addView(npvFallbackView);
+                }
+                lyricContainer.setVisibility(View.VISIBLE);
             } else if(lyricContainer != null && npvLoadingView != null) {
                 lyricContainer.removeView(npvLoadingView); npvLoadingView = null;
             }
@@ -1044,6 +1062,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
             if(positioned && lyricContainer != null) {
                 if(npvGapView == null || npvGapView.getParent() != lyricContainer) {
                     lyricContainer.removeAllViews();
+                    npvFallbackView = null;
                     npvLoadingView = null;
                     GradientTextView gap = new GradientTextView(lyricContainer.getContext());
                     boolean gapThemed = ThemeHook.isThemeEnabled();
@@ -1075,6 +1094,7 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         boolean lineChanged = displayedLine != line;
         if(lineChanged) {
             npvGapView = null;
+            npvFallbackView = null;
             npvLoadingView = null; npvLyricsLoading = false;
             lyricContainer.removeAllViews();
             lyricContainer.setJustifyContent(line.oppositeAligned ? JustifyContent.FLEX_END : JustifyContent.FLEX_START);
@@ -1547,6 +1567,8 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
             lyricClickCatcher = null;
         }
         lyricContainer = null;
+        npvFallbackView = null;
+        npvLoadingView = null;
         activeVocals = null;
         displayedLine = null;
         overlayHost = null;
