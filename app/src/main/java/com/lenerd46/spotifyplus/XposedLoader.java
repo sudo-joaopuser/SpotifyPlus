@@ -166,6 +166,7 @@ public class XposedLoader implements IXposedHookLoadPackage, IXposedHookZygoteIn
                 new NewContextMenuHook().init(lpparam, bridge);
                 new SleepTimerHook(context).init(lpparam, bridge);
                 new PrivateSessionHook(context).init(lpparam, bridge);
+                new AlwaysKeepRunningHook(context).init(lpparam, bridge);
                 new ThemeHook((Application) param.thisObject).init(lpparam, bridge);
                 // new ThemeTest().init(lpparam, bridge);
                 // new LikedSongHook().init(lpparam, bridge);

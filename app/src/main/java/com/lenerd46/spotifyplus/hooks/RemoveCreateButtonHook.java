@@ -361,6 +361,18 @@ public class RemoveCreateButtonHook extends SpotifyHook {
                                     prefs.edit().putBoolean("general_check_updates", value).apply();
                                 });
 
+                                MaterialSwitch alwaysKeepRunning = view.findViewById(R.id.switch_always_keep_spotify_running);
+                                if (alwaysKeepRunning != null) {
+                                    alwaysKeepRunning.setChecked(prefs.getBoolean(AlwaysKeepRunningHook.PREFERENCE, false));
+                                    alwaysKeepRunning.setOnCheckedChangeListener((check, value) -> {
+                                        prefs.edit().putBoolean(AlwaysKeepRunningHook.PREFERENCE, value).apply();
+                                    });
+                                    View row = (View) alwaysKeepRunning.getParent();
+                                    if (row != null) {
+                                        row.setOnClickListener(r -> alwaysKeepRunning.toggle());
+                                    }
+                                }
+
                                 MaterialButton lastfm = view.findViewById(R.id.btn_set_lastfm);
                                 LinearLayout group = view.findViewById(R.id.current_lastfm_username_group);
                                 TextView textView = view.findViewById(R.id.current_lastfm_username_text);
