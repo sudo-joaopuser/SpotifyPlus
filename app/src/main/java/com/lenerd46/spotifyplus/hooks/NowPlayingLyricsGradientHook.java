@@ -106,6 +106,8 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
     private boolean videoBackgroundCached;
     private long videoBackgroundCheckedAt;
     private ViewGroup videoBackgroundHost;
+    private Rect videoButtonBoundsCached;
+    private long videoButtonBoundsCheckedAt;
     private View lyricClickCatcher;
     private SyllableVocals activeVocals;
     private TimedLine displayedLine;
@@ -1234,20 +1236,168 @@ public class NowPlayingLyricsGradientHook extends SpotifyHook {
         Rect titleBounds = findTitleTextViewBounds(decor, title);
         Anchor anchor = titleBounds == null ? findAnchor(decor, title) : new Anchor((ViewGroup) decor, titleBounds);
         if(anchor == null) return null;
-        int spacing = Math.round(12f * activity.getResources().getDisplayMetrics().density);
-        int height = Math.round(40f * activity.getResources().getDisplayMetrics().density);
+        float density = activity.getResources().getDisplayMetrics().density;
+        int spacing = Math.round(12f * density);
+        int height = Math.round(40f * density);
         int[] hostLocation = new int[2];
         anchor.host.getLocationOnScreen(hostLocation);
         int horizontalInset = Math.max(0, anchor.bounds.left - hostLocation[0]);
         anchor.bounds.right = hostLocation[0] + anchor.host.getWidth() - horizontalInset;
         if(activity.getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
-            anchor.bounds.top = anchor.bounds.bottom + Math.round(24f * activity.getResources().getDisplayMetrics().density);
+            anchor.bounds.top = anchor.bounds.bottom + Math.round(24f * density);
             anchor.bounds.bottom = anchor.bounds.top + height;
             return anchor;
         }
-        anchor.bounds.bottom = anchor.bounds.top - spacing;
-        anchor.bounds.top = anchor.bounds.bottom - height;
+
+        Rect videoButtonBounds = getCachedSwitchToVideoButtonBounds(decor, title, anchor.bounds, density);
+        if(videoButtonBounds != null) {
+            int videoSpacing = Math.round(8f * density);
+            int candidateBottom = videoButtonBounds.top - videoSpacing;
+            int candidateTop = candidateBottom - height;
+            if(candidateTop >= hostLocation[1]) {
+                anchor.bounds.bottom = candidateBottom;
+                anchor.bounds.top = candidateTop;
+            } else {
+                anchor.bounds.bottom = anchor.bounds.top - spacing;
+                anchor.bounds.top = anchor.bounds.bottom - height;
+            }
+        } else {
+            anchor.bounds.bottom = anchor.bounds.top - spacing;
+            anchor.bounds.top = anchor.bounds.bottom - height;
+        }
         return anchor;
+    }
+
+    private Rect getCachedSwitchToVideoButtonBounds(View decor, String title, Rect titleBounds, float density) {
+        long now = SystemClock.elapsedRealtime();
+        if(now - videoButtonBoundsCheckedAt < 1000) {
+            return videoButtonBoundsCached;
+        }
+        videoButtonBoundsCheckedAt = now;
+        videoButtonBoundsCached = findSwitchToVideoButtonBounds(decor, title, titleBounds, density);
+        return videoButtonBoundsCached;
+    }
+
+    private boolean isSwitchToVideoText(CharSequence cs) {
+        if(cs == null) return false;
+        String s = normalize(cs.toString()).trim().toLowerCase(java.util.Locale.ROOT);
+        if(s.isEmpty()) return false;
+        return s.equals("mudar para video")
+                || s.equals("mudar para vídeo")
+                || s.equals("switch to video")
+                || s.equals("watch video")
+                || s.equals("assistir ao vídeo")
+                || s.equals("assistir ao video")
+                || s.equals("cambiar a video")
+                || s.equals("cambiar a vídeo");
+    }
+
+    private boolean isValidVideoButtonBounds(Rect bounds, Rect titleBounds, float density) {
+        if(bounds == null || titleBounds == null) return false;
+        int minH = Math.round(18f * density);
+        int maxH = Math.round(55f * density);
+        int minW = Math.round(40f * density);
+        if(bounds.height() < minH || bounds.height() > maxH || bounds.width() < minW) return false;
+        int maxLookUp = Math.round(80f * density);
+        int bottomTol = Math.round(8f * density);
+        return bounds.bottom <= (titleBounds.top + bottomTol) && bounds.top >= (titleBounds.top - maxLookUp);
+    }
+
+    private Rect findSwitchToVideoButtonBounds(View view, String title, Rect titleBounds, float density) {
+        if(view == null || view.getVisibility() != View.VISIBLE) return null;
+        if(view instanceof TextView) {
+            TextView tv = (TextView) view;
+            String text = tv.getText() != null ? tv.getText().toString() : "";
+            if(!text.isEmpty() && !title.equalsIgnoreCase(normalize(text))) {
+                if(isSwitchToVideoText(text) || isSwitchToVideoText(tv.getContentDescription())) {
+                    int[] loc = new int[2];
+                    tv.getLocationOnScreen(loc);
+                    Rect r = new Rect(loc[0], loc[1], loc[0] + tv.getWidth(), loc[1] + tv.getHeight());
+                    if(isValidVideoButtonBounds(r, titleBounds, density)) return r;
+                }
+            }
+        }
+        CharSequence cd = view.getContentDescription();
+        if(cd != null && !title.equalsIgnoreCase(normalize(cd.toString())) && isSwitchToVideoText(cd)) {
+            int[] loc = new int[2];
+            view.getLocationOnScreen(loc);
+            Rect r = new Rect(loc[0], loc[1], loc[0] + view.getWidth(), loc[1] + view.getHeight());
+            if(isValidVideoButtonBounds(r, titleBounds, density)) return r;
+        }
+        try {
+            if(view.getId() != View.NO_ID && view.getResources() != null) {
+                String resName = view.getResources().getResourceEntryName(view.getId()).toLowerCase(java.util.Locale.ROOT);
+                if(resName.contains("video_switch") || resName.contains("switch_to_video") || resName.contains("canvas_switch")) {
+                    int[] loc = new int[2];
+                    view.getLocationOnScreen(loc);
+                    Rect r = new Rect(loc[0], loc[1], loc[0] + view.getWidth(), loc[1] + view.getHeight());
+                    if(isValidVideoButtonBounds(r, titleBounds, density)) return r;
+                }
+            }
+        } catch(Throwable ignored) {}
+
+        if(view instanceof ViewGroup) {
+            if(view.getClass().getName().equals("androidx.compose.ui.platform.AndroidComposeView")) {
+                Rect composeBounds = findSwitchToVideoComposeBounds(view, title, titleBounds, density);
+                if(composeBounds != null) return composeBounds;
+            }
+            ViewGroup group = (ViewGroup) view;
+            for(int i = 0; i < group.getChildCount(); i++) {
+                Rect bounds = findSwitchToVideoButtonBounds(group.getChildAt(i), title, titleBounds, density);
+                if(bounds != null) return bounds;
+            }
+        }
+        return null;
+    }
+
+    private Rect findSwitchToVideoComposeBounds(View composeView, String title, Rect titleBounds, float density) {
+        try {
+            AccessibilityNodeProvider provider = composeView.getAccessibilityNodeProvider();
+            if(provider != null) {
+                AccessibilityNodeInfo root = provider.createAccessibilityNodeInfo(AccessibilityNodeProvider.HOST_VIEW_ID);
+                if(root != null) {
+                    try {
+                        return findSwitchToVideoNodeBounds(provider, root, title, titleBounds, density, new int[]{0});
+                    } finally {
+                        root.recycle();
+                    }
+                }
+            }
+        } catch(Throwable ignored) {}
+        return null;
+    }
+
+    private Rect findSwitchToVideoNodeBounds(AccessibilityNodeProvider provider, AccessibilityNodeInfo node, String title, Rect titleBounds, float density, int[] visited) {
+        if(visited[0]++ > 512) return null;
+        CharSequence text = node.getText();
+        CharSequence desc = node.getContentDescription();
+        if(text != null && !title.equalsIgnoreCase(normalize(text.toString())) && isSwitchToVideoText(text)) {
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+            if(isValidVideoButtonBounds(bounds, titleBounds, density)) return bounds;
+        }
+        if(desc != null && !title.equalsIgnoreCase(normalize(desc.toString())) && isSwitchToVideoText(desc)) {
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+            if(isValidVideoButtonBounds(bounds, titleBounds, density)) return bounds;
+        }
+        for(int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = null;
+            try {
+                child = node.getChild(i);
+                if(child == null) {
+                    long childId = ((Number) XposedHelpers.callMethod(node, "getChildId", i)).longValue();
+                    child = provider.createAccessibilityNodeInfo((int) (childId >> 32));
+                }
+                if(child == null) continue;
+                Rect bounds = findSwitchToVideoNodeBounds(provider, child, title, titleBounds, density, visited);
+                if(bounds != null) return bounds;
+            } catch(Throwable ignored) {
+            } finally {
+                if(child != null) child.recycle();
+            }
+        }
+        return null;
     }
 
     private Rect findTitleTextViewBounds(View view, String title) {

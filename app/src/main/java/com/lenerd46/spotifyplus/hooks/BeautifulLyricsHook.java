@@ -1,5 +1,7 @@
 package com.lenerd46.spotifyplus.hooks;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.annotation.SuppressLint;
@@ -177,7 +179,9 @@ public class BeautifulLyricsHook extends SpotifyHook {
 
     private int lastAppliedActiveIndex = Integer.MIN_VALUE;
     private boolean lastBlurAllowed = true;
-    private ValueAnimator inertiaAnimator;
+    private static ValueAnimator inertiaAnimator;
+    private static volatile boolean isScrollingLyrics = false;
+    private static volatile boolean wasFlinging = false;
     private WeakReference<Activity> lastHostActivity = new WeakReference<>(null);
     /** Lyrics activities already intercepted, so the direct hook and the generic
      *  Activity.onCreate fallback below never finish/show the overlay twice. */
@@ -1249,6 +1253,23 @@ public class BeautifulLyricsHook extends SpotifyHook {
     private void dismissOverlay(boolean animated) {
         if (overlayHost == null || dismissing) return;
         dismissing = true;
+        if (inertiaAnimator != null) {
+            inertiaAnimator.cancel();
+            inertiaAnimator = null;
+        }
+        if (lyricsScrollAnimator != null) {
+            lyricsScrollAnimator.cancel();
+            lyricsScrollAnimator = null;
+        }
+        isScrollingLyrics = false;
+        wasFlinging = false;
+        isUserInteracting = false;
+        if (experimentalTouchSurface != null) {
+            experimentalTouchSurface.removeCallbacks(finishLineScrollEffects);
+        }
+        if (overlayLyricsContainer != null) {
+            overlayLyricsContainer.removeCallbacks(finishLineScrollEffects);
+        }
         FrameLayout host = overlayHost;
         resumeUnderlyingContent();
         if (animated && host.isAttachedToWindow()) {
@@ -1765,10 +1786,14 @@ public class BeautifulLyricsHook extends SpotifyHook {
             @Override
             public boolean onDown(MotionEvent e) {
                 isUserInteracting = true;
-                if (inertiaAnimator != null) {
+                if (inertiaAnimator != null && inertiaAnimator.isRunning()) {
                     inertiaAnimator.cancel();
                     inertiaAnimator = null;
+                    wasFlinging = true;
+                } else {
+                    wasFlinging = false;
                 }
+                isScrollingLyrics = false;
 
                 clearHeaderFade();
                 clearAllLineBlur();
@@ -1783,6 +1808,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
                 isFollowingPlayback = false;
+                isScrollingLyrics = true;
 
                 contentHeight = logicalContentHeight(contentContainer);
                 if (contentHeight <= 0) contentHeight = contentContainer.getHeight();
@@ -1806,14 +1832,26 @@ public class BeautifulLyricsHook extends SpotifyHook {
             public boolean onFling(MotionEvent e1, MotionEvent e2, float velocityX, float velocityY) {
                 double velocity = velocityY * 0.001;
 
+                isScrollingLyrics = true;
                 inertiaAnimator = ValueAnimator.ofFloat((float) velocity, 0f);
                 inertiaAnimator.setDuration(800);
                 inertiaAnimator.setInterpolator(new DecelerateInterpolator());
                 inertiaAnimator.addUpdateListener(animation -> {
+                    if (dismissing || overlayHost == null || contentContainer == null || !contentContainer.isAttachedToWindow()) {
+                        animation.cancel();
+                        return;
+                    }
                     float v = (float) animation.getAnimatedValue();
                     if (!isUserInteracting) {
                         targetScrollOffset += v * 16;
                         applyImmediateScrollOffset(contentContainer, targetScrollOffset);
+                    }
+                });
+                inertiaAnimator.addListener(new AnimatorListenerAdapter() {
+                    @Override
+                    public void onAnimationEnd(Animator animation) {
+                        inertiaAnimator = null;
+                        isScrollingLyrics = false;
                     }
                 });
                 inertiaAnimator.start();
@@ -2539,30 +2577,39 @@ public class BeautifulLyricsHook extends SpotifyHook {
                 vocalGroupContainer.setBackground(highlightBackground);
 
                 final float touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
-                final float[] downX = new float[1];
-                final float[] downY = new float[1];
+                final float[] downRawX = new float[1];
+                final float[] downRawY = new float[1];
+                final long[] downTime = new long[1];
+                final double[] downScrollOffset = new double[1];
                 final boolean[] isDragging = new boolean[1];
 
                 View.OnTouchListener seekTouchListener = (v, event) -> {
                     switch (event.getActionMasked()) {
                         case MotionEvent.ACTION_DOWN:
-                            downX[0] = event.getX();
-                            downY[0] = event.getY();
-                            isDragging[0] = false;
+                            downRawX[0] = event.getRawX();
+                            downRawY[0] = event.getRawY();
+                            downTime[0] = SystemClock.uptimeMillis();
+                            downScrollOffset[0] = targetScrollOffset;
+                            isDragging[0] = wasFlinging;
 
-                            ObjectAnimator startAnimation = ObjectAnimator.ofInt(highlightBackground, "alpha",
-                                            highlightBackground.getAlpha(), 50)
-                                    .setDuration(400);
-                            startAnimation.setInterpolator(new DecelerateInterpolator(2.0f));
-                            startAnimation.start();
+                            if (!wasFlinging) {
+                                ObjectAnimator startAnimation = ObjectAnimator.ofInt(highlightBackground, "alpha",
+                                                highlightBackground.getAlpha(), 50)
+                                        .setDuration(250);
+                                startAnimation.setInterpolator(new DecelerateInterpolator(2.0f));
+                                startAnimation.start();
+                            }
                             break;
 
                         case MotionEvent.ACTION_MOVE: {
                             if (!isDragging[0]) {
-                                float dx = event.getX() - downX[0];
-                                float dy = event.getY() - downY[0];
-                                if (Math.hypot(dx, dy) > touchSlop) {
+                                float dx = event.getRawX() - downRawX[0];
+                                float dy = event.getRawY() - downRawY[0];
+                                double scrollDelta = Math.abs(targetScrollOffset - downScrollOffset[0]);
+                                if (Math.hypot(dx, dy) > touchSlop || scrollDelta > (touchSlop / 2) || isScrollingLyrics) {
                                     isDragging[0] = true;
+                                    highlightBackground.setAlpha(0);
+                                    v.invalidate();
                                 }
                             }
                             break;
@@ -2572,11 +2619,23 @@ public class BeautifulLyricsHook extends SpotifyHook {
                         case MotionEvent.ACTION_CANCEL:
                             ObjectAnimator endAnimation = ObjectAnimator.ofInt(highlightBackground, "alpha",
                                             highlightBackground.getAlpha(), 0)
-                                    .setDuration(400);
+                                    .setDuration(200);
                             endAnimation.setInterpolator(new DecelerateInterpolator(2.0f));
                             endAnimation.start();
 
-                            if (event.getActionMasked() == MotionEvent.ACTION_UP && !isDragging[0]) {
+                            long duration = SystemClock.uptimeMillis() - downTime[0];
+                            float totalDx = event.getRawX() - downRawX[0];
+                            float totalDy = event.getRawY() - downRawY[0];
+                            double totalScrollDelta = Math.abs(targetScrollOffset - downScrollOffset[0]);
+
+                            boolean isCleanTap = !isDragging[0]
+                                    && !isScrollingLyrics
+                                    && !wasFlinging
+                                    && duration < 400
+                                    && Math.hypot(totalDx, totalDy) <= touchSlop
+                                    && totalScrollDelta <= (touchSlop / 2);
+
+                            if (event.getActionMasked() == MotionEvent.ACTION_UP && isCleanTap) {
                                 resumeAutoFollowAfterTap(lyricsContainer);
                                 v.performClick();
                             } else {
@@ -2591,6 +2650,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
                 translationContainer.setOnTouchListener(seekTouchListener);
 
                 View.OnClickListener seekClickListener = (v) -> {
+                    if (isScrollingLyrics || wasFlinging) return;
                     resumeAutoFollowAfterTap(lyricsContainer);
 
                     // A restored local draft can open before the network lyric loader resolves ctor.
@@ -2794,30 +2854,39 @@ public class BeautifulLyricsHook extends SpotifyHook {
                 vocalGroupContainer.setBackground(highlightBackground);
 
                 final float touchSlop = ViewConfiguration.get(activity).getScaledTouchSlop();
-                final float[] downX = new float[1];
-                final float[] downY = new float[1];
+                final float[] downRawX = new float[1];
+                final float[] downRawY = new float[1];
+                final long[] downTime = new long[1];
+                final double[] downScrollOffset = new double[1];
                 final boolean[] isDragging = new boolean[1];
 
                 View.OnTouchListener seekTouchListener = (v, event) -> {
                     switch (event.getActionMasked()) {
                         case MotionEvent.ACTION_DOWN:
-                            downX[0] = event.getX();
-                            downY[0] = event.getY();
-                            isDragging[0] = false;
+                            downRawX[0] = event.getRawX();
+                            downRawY[0] = event.getRawY();
+                            downTime[0] = SystemClock.uptimeMillis();
+                            downScrollOffset[0] = targetScrollOffset;
+                            isDragging[0] = wasFlinging;
 
-                            ObjectAnimator startAnimation = ObjectAnimator.ofInt(highlightBackground, "alpha",
-                                            highlightBackground.getAlpha(), 50)
-                                    .setDuration(400);
-                            startAnimation.setInterpolator(new DecelerateInterpolator(2.0f));
-                            startAnimation.start();
+                            if (!wasFlinging) {
+                                ObjectAnimator startAnimation = ObjectAnimator.ofInt(highlightBackground, "alpha",
+                                                highlightBackground.getAlpha(), 50)
+                                        .setDuration(250);
+                                startAnimation.setInterpolator(new DecelerateInterpolator(2.0f));
+                                startAnimation.start();
+                            }
                             break;
 
                         case MotionEvent.ACTION_MOVE: {
                             if (!isDragging[0]) {
-                                float dx = event.getX() - downX[0];
-                                float dy = event.getY() - downY[0];
-                                if (Math.hypot(dx, dy) > touchSlop) {
+                                float dx = event.getRawX() - downRawX[0];
+                                float dy = event.getRawY() - downRawY[0];
+                                double scrollDelta = Math.abs(targetScrollOffset - downScrollOffset[0]);
+                                if (Math.hypot(dx, dy) > touchSlop || scrollDelta > (touchSlop / 2) || isScrollingLyrics) {
                                     isDragging[0] = true;
+                                    highlightBackground.setAlpha(0);
+                                    v.invalidate();
                                 }
                             }
                             break;
@@ -2827,11 +2896,23 @@ public class BeautifulLyricsHook extends SpotifyHook {
                         case MotionEvent.ACTION_CANCEL:
                             ObjectAnimator endAnimation = ObjectAnimator.ofInt(highlightBackground, "alpha",
                                             highlightBackground.getAlpha(), 0)
-                                    .setDuration(400);
+                                    .setDuration(200);
                             endAnimation.setInterpolator(new DecelerateInterpolator(2.0f));
                             endAnimation.start();
 
-                            if (event.getActionMasked() == MotionEvent.ACTION_UP && !isDragging[0]) {
+                            long duration = SystemClock.uptimeMillis() - downTime[0];
+                            float totalDx = event.getRawX() - downRawX[0];
+                            float totalDy = event.getRawY() - downRawY[0];
+                            double totalScrollDelta = Math.abs(targetScrollOffset - downScrollOffset[0]);
+
+                            boolean isCleanTap = !isDragging[0]
+                                    && !isScrollingLyrics
+                                    && !wasFlinging
+                                    && duration < 400
+                                    && Math.hypot(totalDx, totalDy) <= touchSlop
+                                    && totalScrollDelta <= (touchSlop / 2);
+
+                            if (event.getActionMasked() == MotionEvent.ACTION_UP && isCleanTap) {
                                 resumeAutoFollowAfterTap(lyricsContainer);
                                 v.performClick();
                             } else {
@@ -2846,6 +2927,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
                 translationContainer.setOnTouchListener(seekTouchListener);
 
                 View.OnClickListener seekClickListener = (v) -> {
+                    if (isScrollingLyrics || wasFlinging) return;
                     resumeAutoFollowAfterTap(lyricsContainer);
 
                     if (ctor == null && syncMediaController != null) {
@@ -3141,44 +3223,47 @@ public class BeautifulLyricsHook extends SpotifyHook {
     }
 
     private void applyLineFocusEffects() {
-        boolean blurAllowed = isFollowingPlayback && !isUserInteracting;
+        if (dismissing || overlayHost == null || lineRoots.isEmpty()) return;
+        try {
+            boolean blurAllowed = isFollowingPlayback && !isUserInteracting;
 
-        // if user is scrolling or we aren't following playback, clear everything
-        if (!blurAllowed) {
-            if (lastBlurAllowed) {
-                clearAllLineBlur();
-                lastBlurAllowed = false;
+            // if user is scrolling or we aren't following playback, clear everything
+            if (!blurAllowed) {
+                if (lastBlurAllowed) {
+                    clearAllLineBlur();
+                    lastBlurAllowed = false;
+                }
+                return;
             }
-            return;
-        }
 
-        lastBlurAllowed = true;
+            lastBlurAllowed = true;
 
-        if (activeLineIndex < 0) {
-            clearAllLineBlur();
-            return;
-        }
+            if (activeLineIndex < 0) {
+                clearAllLineBlur();
+                return;
+            }
 
-        // no need to redo if same active line and blur is allowed
-        if (activeLineIndex == lastAppliedActiveIndex)
-            return;
-        int prevIndex = lastAppliedActiveIndex;
-        lastAppliedActiveIndex = activeLineIndex;
+            // no need to redo if same active line and blur is allowed
+            if (activeLineIndex == lastAppliedActiveIndex)
+                return;
+            int prevIndex = lastAppliedActiveIndex;
+            lastAppliedActiveIndex = activeLineIndex;
 
-        int size = lineRoots.size();
-        if (size == 0) return;
+            int size = lineRoots.size();
+            if (size == 0) return;
 
-        int start = prevIndex == Integer.MIN_VALUE ? 0 : Math.max(0, Math.min(prevIndex, activeLineIndex) - 4);
-        int end = prevIndex == Integer.MIN_VALUE ? size : Math.min(size, Math.max(prevIndex, activeLineIndex) + 5);
+            int start = prevIndex == Integer.MIN_VALUE ? 0 : Math.max(0, Math.min(prevIndex, activeLineIndex) - 4);
+            int end = prevIndex == Integer.MIN_VALUE ? size : Math.min(size, Math.max(prevIndex, activeLineIndex) + 5);
 
-        for (int i = start; i < end; i++) {
-            View line = lineRoots.get(i);
-            int dist = Math.abs(i - activeLineIndex);
-            int bucket = Math.min(dist, BLUR_MAX_DISTANCE);
-            float radiusDp = BLUR_LEVELS_DP[bucket];
-            float radiusPx = dpToPxF(radiusDp, line);
-            setLineBlur(line, radiusPx);
-        }
+            for (int i = start; i < end; i++) {
+                View line = lineRoots.get(i);
+                int dist = Math.abs(i - activeLineIndex);
+                int bucket = Math.min(dist, BLUR_MAX_DISTANCE);
+                float radiusDp = BLUR_LEVELS_DP[bucket];
+                float radiusPx = dpToPxF(radiusDp, line);
+                setLineBlur(line, radiusPx);
+            }
+        } catch (Throwable ignored) {}
     }
 
     private void clearAllLineBlur() {
@@ -3390,6 +3475,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
 
     @SuppressLint("ClickableViewAccessibility")
     private boolean handleTouchSurfaceEvent(View touchSurface, LinearLayout contentContainer, MotionEvent event) {
+        if (dismissing || overlayHost == null) return false;
         rightContainer.setAlpha(1f);
 
         boolean result = gestureDetector.onTouchEvent(event);
@@ -3397,7 +3483,9 @@ public class BeautifulLyricsHook extends SpotifyHook {
         if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
             isUserInteracting = false;
             limitScrollBounds(contentContainer);
-            touchSurface.post(finishLineScrollEffects);
+            if (!dismissing && overlayHost != null) {
+                touchSurface.post(finishLineScrollEffects);
+            }
 
             if (!isFollowingPlayback && currentActiveLineView != null) {
                 View parent = (View) contentContainer.getParent();
@@ -3409,7 +3497,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
 
                     boolean visible = activeBottom > 0 && activeTop < viewportH;
 
-                    if (visible) {
+                    if (visible && !dismissing && overlayHost != null) {
                         isFollowingPlayback = true;
                         contentContainer.post(this::applyLineFocusEffects);
                     }
@@ -3547,65 +3635,88 @@ public class BeautifulLyricsHook extends SpotifyHook {
     }
 
     private void applyCurrentLineTranslations() {
-        for (View line : lineRoots) {
-            float translation = (float)targetScrollOffset + getFocusedPairOffsetPx(line);
-            if(Math.abs(line.getTranslationY() - translation) > 0.1f) line.setTranslationY(translation);
-        }
-        for(View follower : scrollFollowers) if(Math.abs(follower.getTranslationY() - (float)targetScrollOffset) > 0.1f) follower.setTranslationY((float)targetScrollOffset);
+        if (dismissing || overlayHost == null || lineRoots.isEmpty()) return;
+        try {
+            for (View line : lineRoots) {
+                if (line == null) continue;
+                float translation = (float)targetScrollOffset + getFocusedPairOffsetPx(line);
+                if(Math.abs(line.getTranslationY() - translation) > 0.1f) line.setTranslationY(translation);
+            }
+            for(View follower : scrollFollowers) {
+                if (follower == null) continue;
+                if(Math.abs(follower.getTranslationY() - (float)targetScrollOffset) > 0.1f) follower.setTranslationY((float)targetScrollOffset);
+            }
 
-        applyHeaderFadeToLines();
+            applyHeaderFadeToLines();
+        } catch (Throwable ignored) {}
     }
 
     private void applyImmediateScrollOffset(LinearLayout contentContainer, double offset) {
+        if (dismissing || overlayHost == null || contentContainer == null) return;
         targetScrollOffset = offset;
         limitScrollBounds(contentContainer);
         contentContainer.setTranslationY(0f);
-        for(View line : lineRoots) line.setTranslationY((float)targetScrollOffset + getFocusedPairOffsetPx(line));
-        for(View follower : scrollFollowers) follower.setTranslationY((float)targetScrollOffset);
+        try {
+            for(View line : lineRoots) {
+                if (line != null) {
+                    line.setTranslationY((float)targetScrollOffset + getFocusedPairOffsetPx(line));
+                }
+            }
+            for(View follower : scrollFollowers) {
+                if (follower != null) {
+                    follower.setTranslationY((float)targetScrollOffset);
+                }
+            }
+        } catch (Throwable ignored) {}
     }
 
     private void applyHeaderFadeToLines() {
-        if (headerFadeAnchor == null || lineRoots.isEmpty())
+        if (dismissing || headerFadeAnchor == null || lineRoots.isEmpty())
             return;
         if (!headerFadeAnchor.isAttachedToWindow())
             return;
 
-        float fadeDistancePx = TypedValue.applyDimension(
-                TypedValue.COMPLEX_UNIT_DIP,
-                HEADER_FADE_DISTANCE_DP,
-                headerFadeAnchor.getResources().getDisplayMetrics());
+        try {
+            float fadeDistancePx = TypedValue.applyDimension(
+                    TypedValue.COMPLEX_UNIT_DIP,
+                    HEADER_FADE_DISTANCE_DP,
+                    headerFadeAnchor.getResources().getDisplayMetrics());
 
-        int[] headerLoc = new int[2];
-        headerFadeAnchor.getLocationInWindow(headerLoc);
-        float headerBottomInWindow = headerLoc[1] + headerFadeAnchor.getHeight();
-        ViewParent lineParent = lineRoots.get(0).getParent();
-        if(!(lineParent instanceof View)) return;
-        int[] containerLoc = new int[2];
-        ((View)lineParent).getLocationInWindow(containerLoc);
+            int[] headerLoc = new int[2];
+            headerFadeAnchor.getLocationInWindow(headerLoc);
+            float headerBottomInWindow = headerLoc[1] + headerFadeAnchor.getHeight();
+            if (lineRoots.isEmpty()) return;
+            View firstLine = lineRoots.get(0);
+            if (firstLine == null) return;
+            ViewParent lineParent = firstLine.getParent();
+            if(!(lineParent instanceof View)) return;
+            int[] containerLoc = new int[2];
+            ((View)lineParent).getLocationInWindow(containerLoc);
 
-        for (View line : lineRoots) {
-            if (line == null || !line.isAttachedToWindow())
-                continue;
+            for (View line : lineRoots) {
+                if (line == null || !line.isAttachedToWindow())
+                    continue;
 
-            float lineTopInWindow = containerLoc[1] + line.getTop() + line.getTranslationY();
-            float lineBottomInWindow = lineTopInWindow + line.getHeight();
-            float lineCenterInWindow = (lineTopInWindow + lineBottomInWindow) * 0.5f;
+                float lineTopInWindow = containerLoc[1] + line.getTop() + line.getTranslationY();
+                float lineBottomInWindow = lineTopInWindow + line.getHeight();
+                float lineCenterInWindow = (lineTopInWindow + lineBottomInWindow) * 0.5f;
 
-            float distanceBelowHeader = lineCenterInWindow - headerBottomInWindow;
+                float distanceBelowHeader = lineCenterInWindow - headerBottomInWindow;
 
-            float alpha;
-            if (distanceBelowHeader <= 0f) {
-                alpha = HEADER_FADE_MIN_ALPHA;
-            } else if (distanceBelowHeader >= fadeDistancePx) {
-                alpha = 1f;
-            } else {
-                float t = distanceBelowHeader / fadeDistancePx;
-                t = t * t * (3f - 2f * t);
-                alpha = HEADER_FADE_MIN_ALPHA + ((1f - HEADER_FADE_MIN_ALPHA) * t);
+                float alpha;
+                if (distanceBelowHeader <= 0f) {
+                    alpha = HEADER_FADE_MIN_ALPHA;
+                } else if (distanceBelowHeader >= fadeDistancePx) {
+                    alpha = 1f;
+                } else {
+                    float t = distanceBelowHeader / fadeDistancePx;
+                    t = t * t * (3f - 2f * t);
+                    alpha = HEADER_FADE_MIN_ALPHA + ((1f - HEADER_FADE_MIN_ALPHA) * t);
+                }
+
+                if(Math.abs(line.getAlpha() - alpha) > 0.005f) line.setAlpha(alpha);
             }
-
-            if(Math.abs(line.getAlpha() - alpha) > 0.005f) line.setAlpha(alpha);
-        }
+        } catch (Throwable ignored) {}
     }
 
     private void clearHeaderFade() {
@@ -4304,6 +4415,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
         private LinearGradient fadeShader;
         private LinearGradient bottomFadeShader;
         private int fadeHeightPx;
+        private int rawBottomClipInset;
         private int bottomClipInset;
         private OnTouchListener gestureTouchListener;
 
@@ -4323,14 +4435,43 @@ public class BeautifulLyricsHook extends SpotifyHook {
             this.gestureTouchListener = gestureTouchListener;
         }
 
+        private boolean dispatchedCancelToChildren = false;
+
         @Override
         public boolean dispatchTouchEvent(MotionEvent event) {
             boolean gestureHandled = !authoring && gestureTouchListener != null && gestureTouchListener.onTouch(this, event);
             if (authoring && event.getActionMasked() == MotionEvent.ACTION_DOWN && getParent() != null)
                 getParent().requestDisallowInterceptTouchEvent(true);
-            boolean handled = super.dispatchTouchEvent(event);
-            if (authoring && (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) && getParent() != null)
+
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                dispatchedCancelToChildren = false;
+            }
+
+            boolean handled = false;
+            if (!authoring && (isScrollingLyrics || wasFlinging)) {
+                if (!dispatchedCancelToChildren) {
+                    MotionEvent cancelEvent = MotionEvent.obtain(event);
+                    cancelEvent.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(cancelEvent);
+                    cancelEvent.recycle();
+                    dispatchedCancelToChildren = true;
+                }
+            } else if (!dispatchedCancelToChildren) {
+                handled = super.dispatchTouchEvent(event);
+            }
+
+            if (authoring && (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) && getParent() != null)
                 getParent().requestDisallowInterceptTouchEvent(false);
+
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                dispatchedCancelToChildren = false;
+                wasFlinging = false;
+                if (inertiaAnimator == null || !inertiaAnimator.isRunning()) {
+                    isScrollingLyrics = false;
+                }
+            }
+
             return handled || gestureHandled || authoring;
         }
 
@@ -4341,7 +4482,8 @@ public class BeautifulLyricsHook extends SpotifyHook {
         }
 
         public void setBottomClipInset(int bottomClipInset) {
-            int boundedInset = Math.max(0, Math.min(bottomClipInset, getHeight()));
+            this.rawBottomClipInset = Math.max(0, bottomClipInset);
+            int boundedInset = getHeight() > 0 ? Math.min(rawBottomClipInset, getHeight()) : rawBottomClipInset;
             if(this.bottomClipInset == boundedInset) return;
             this.bottomClipInset = boundedInset;
             rebuildShader();
@@ -4349,7 +4491,7 @@ public class BeautifulLyricsHook extends SpotifyHook {
         }
 
         public int getBottomClipInset() {
-            return bottomClipInset;
+            return rawBottomClipInset;
         }
 
         private void rebuildShader() {
@@ -4377,6 +4519,9 @@ public class BeautifulLyricsHook extends SpotifyHook {
         @Override
         protected void onSizeChanged(int w, int h, int oldw, int oldh) {
             super.onSizeChanged(w, h, oldw, oldh);
+            if (h > 0 && rawBottomClipInset > 0) {
+                this.bottomClipInset = Math.min(rawBottomClipInset, h);
+            }
             rebuildShader();
         }
 
