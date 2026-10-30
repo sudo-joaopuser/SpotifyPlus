@@ -11,7 +11,7 @@ Word by word lyrics, new features, customizations, and much more, all in one mod
 <a href="https://t.me/spotifypluscool" target="_blank">
 ![Telegram Badge](https://telegram-badge.vercel.app/api/telegram-badge?channelId=@spotifypluscool)
 </a>
-![Static Badge](https://img.shields.io/badge/Spotify%20Version-9.1.82.2160-green?logo=spotify)
+![Static Badge](https://img.shields.io/badge/Spotify%20Version-9.1.94.1929-green?logo=spotify)
 ![GitHub Release](https://img.shields.io/github/v/release/LeNerd46/SpotifyPlus?color=lightgreen)
 [![Crowdin](https://badges.crowdin.net/spotify-plus/localized.svg)](https://crowdin.com/project/spotify-plus)
 
@@ -23,7 +23,7 @@ Spotify Plus is an Xposed module that enhances Spotify with new functionality, m
 more customization, while preserving the native Spotify feel and experience.
 
 > [!IMPORTANT]
-> The latest recommended version of Spotify to use is v9.1.82.2160. The module is not guaranteed to work past this
+> The module has been tested and works up to Spotify v9.1.94.1929. The module is not guaranteed to work past this
 version
 
 ## Features
